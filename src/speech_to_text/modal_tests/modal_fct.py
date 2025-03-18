@@ -18,12 +18,16 @@ image = (
 
 MODAL_GPU = "A10G"
 
+
 # 🎙️ Process Audio (MODAL)
 @stub.function(image=image, gpu=MODAL_GPU, timeout=600, keep_warm=1)
 def process_audio_modal(audio_bytes: bytes) -> bytes:
     import subprocess
+
     print("🚀 Starting Ollama server...")
-    subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.Popen(
+        ["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
     while True:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         result = sock.connect_ex(("127.0.0.1", 11434))
@@ -41,8 +45,8 @@ def process_audio_modal(audio_bytes: bytes) -> bytes:
     output_buffer = process_audio_local(input_buffer)
     return output_buffer.getvalue()
 
+
 def modal_main(audio_buffer: io.BytesIO) -> io.BytesIO:
     with stub.run():
         output_bytes = process_audio_modal.remote(audio_buffer.getvalue())
         return io.BytesIO(output_bytes)
-

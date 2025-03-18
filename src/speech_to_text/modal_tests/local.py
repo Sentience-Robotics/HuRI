@@ -1,15 +1,42 @@
 import soundfile as sf
 from llm.llm import get_chain
-from speech_to_text.stt import get_whisper_model
+from speech_to_text.stt_model import get_whisper_model
 from text_to_speech.tts import get_tts_model, tokenize_text, get_tts_tokenizer
 import io
 import time
+
+
+def stt(audio_buffer: io.BytesIO) -> str:
+    whisper = get_whisper_model("base.en")
+    audio_buffer.seek(0)  # Ensure we're at the start
+    audio_array, sample_rate = sf.read(audio_buffer, dtype="float32")
+
+    print(f"📝 Transcription beginning...")
+    start_time = time.perf_counter()
+    audio_buffer.seek(0)
+
+    # Transcribe with language detection
+    result = whisper.transcribe(
+        audio_array, language="en"
+    )  # `language=None` enables autodetect
+
+    prompt = result["text"]
+    # detected_language = result["language"]  # Whisper auto-detected language
+
+    # print(f"📝 Transcription: {prompt}")
+    # print(f"🌍 Detected Language: {detected_language}")
+    # prompt = whisper.transcribe(audio_array, language="en")["text"]
+    elapsed_time = time.perf_counter() - start_time
+    print(f"📝 Transcription: {prompt}\n, it took {elapsed_time:.2f}s")
+
+    return prompt
+
 
 # 🎙️ Process Audio (LOCAL)
 def process_audio_local(audio_buffer: io.BytesIO) -> io.BytesIO:
 
     # Load models
-    ollama = get_chain()
+    # ollama = get_chain()
     whisper = get_whisper_model("base.en")
     tts = get_tts_model()
     tts_tokenizer = get_tts_tokenizer()
@@ -27,13 +54,13 @@ def process_audio_local(audio_buffer: io.BytesIO) -> io.BytesIO:
     print(f"📝 Transcription: {prompt}, it took {elapsed_time:.2f}s")
 
     # Process text with LLM
-    answer = ollama.invoke({"question": prompt})
-    print(f"🤖 LLM Response: {answer}")
+    # answer = ollama.invoke({"question": prompt})
+    # print(f"🤖 LLM Response: {answer}")
 
-    # Convert LLM text to speech
-    prompt_input_ids = tokenize_text(answer.split("</think>")[-1], tts_tokenizer)
-    input_ids = tokenize_text("The voice of a young lady", tts_tokenizer)
-    generation = tts.generate(input_ids=input_ids, prompt_input_ids=prompt_input_ids)
+    # # Convert LLM text to speech
+    prompt_input_ids = tokenize_text(prompt.split("</think>")[-1], tts_tokenizer)
+    # input_ids = tokenize_text("The voice of Donald Trump", tts_tokenizer)
+    generation = tts.generate(prompt_input_ids=prompt_input_ids)
     audio_arr = generation.cpu().numpy().squeeze()
 
     # Save output audio
