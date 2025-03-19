@@ -50,9 +50,11 @@ class Rag:
 
     def ragQuestion(self, question: str):
         history = "\n".join([f"Human: {qa['question']}\nAI: {qa['answer']}" for qa in self.conversation_log["conversation"]])
+        helpingContext = "Answer with just your message like in a conversation. "
+        question = helpingContext + question
         response = self.qaChain.invoke({"history": history, "input": question})
         answer = response["answer"]
-        self.conversation_log["conversation"].append({"question": question, "answer": answer})
+        self.conversation_log["conversation"].append({"question": question.split(helpingContext)[1:], "answer": answer})
         return answer
     
     def saveConversation(self, filename="conversation_log.json"):

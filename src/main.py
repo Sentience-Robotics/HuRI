@@ -1,54 +1,54 @@
 import os
 
+from enum import Enum
 from llm.llm import get_chain
-from speech_to_text.stt import get_whisper_model
-from speech_to_text.recorder import listen_for_keyword
-from text_to_speech.tts import get_tts_model, tokenize_text, get_tts_tokenizer
+# from speech_to_text.recorder import listen_for_keyword
+# from text_to_speech.tts import get_tts_model, tokenize_text, get_tts_tokenizer
 import soundfile as sf
 import simpleaudio as sa
 from speech_to_text.speech_to_text import SpeechToText
+from rag.rag import Rag
 
-def main():
-    ollama = get_chain()
-    whisper = get_whisper_model("base.en")
-    tts = get_tts_model()
-    tts_tokenizer = get_tts_tokenizer()
-    while True:
-        listen_for_keyword("start recording")
-        prompt = whisper.transcribe("test_audio/my_audio.wav", language='en')["text"]
+class Modes(Enum):
+    EXIT = 0
+    LLM = 1
+    CONTEXT = 2
+    RAG = 3
+
+def loop(stt: SpeechToText, mode: Modes, mode_function: dict):
+    while mode:
+        prompt = stt.get_prompt()
         print(prompt)
-        answer = ollama.invoke({"question": prompt})
-        print(answer)
-        if prompt == "exit":
-            break
-        prompt_input_ids = tokenize_text(answer.split("</think>")[-1], tts_tokenizer)
-        input_ids = tokenize_text("The voice of Donald Trump", tts_tokenizer)
-        generation = tts.generate(input_ids=input_ids, prompt_input_ids=prompt_input_ids)
-        audio_arr = generation.cpu().numpy().squeeze()
-        sf.write("test_audio/parler_tts_out.wav", audio_arr, tts.config.sampling_rate)
-        print("Audio saved as test_audio/parler_tts_out.wav")
-
-        print("Playing audio...")
-        wave_obj = sa.WaveObject.from_wave_file("test_audio/parler_tts_out.wav")
-        play_obj = wave_obj.play()
-        play_obj.wait_done()
-        print("Audio played")
+        if "switch llm" in prompt.lower():
+            mode = Modes.LLM
+        elif "switch context" in prompt.lower():
+            mode = Modes.CONTEXT
+        elif "switch rag" in prompt.lower():
+            mode = Modes.RAG
+        elif "bye bye" in prompt.lower():
+            mode = Modes.EXIT
+        elif prompt.strip() == "":
+            continue
+        else:
+            answer = mode_function[mode](prompt)
+            print(answer)
         
-
-
-def main_2():
+def main():
     stt = SpeechToText()
+    rag = Rag(model="deepseek-v2:16b")
+    rag.ragLoader("tests/rag/docsRag", "txt")
+    mode = Modes.LLM
+    mode_function = {
+        Modes.LLM: rag.ragQuestion,
+        Modes.RAG: rag.ragLoader
+    }
     stt.start()
     try:
-        while True:
-            prompt = stt.get_prompt()
-            print(prompt)
-            if "bye bye" in prompt.lower():
-                stt.stop()
-                break
-
+        loop(stt, mode, mode_function)
     except KeyboardInterrupt:
         print("CTRL+C detected. Stopping the program.")
+    except Exception as e:
+        print("Unexpected Error:", e)
     stt.stop()
 
 

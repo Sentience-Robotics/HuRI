@@ -5,7 +5,6 @@ __pycache__/
 
 test_audio/
 venv*
-test_audio/
 
 # C extensions
 *.so
