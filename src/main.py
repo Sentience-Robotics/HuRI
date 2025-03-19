@@ -1,5 +1,6 @@
 from speech_to_text.speech_to_text import SpeechToText
 
+
 def main():
     stt = SpeechToText()
     stt.start()
@@ -14,6 +15,7 @@ def main():
     except KeyboardInterrupt:
         print("CTRL+C detected. Stopping the program.")
     stt.stop()
+
 
 if __name__ == "__main__":
     main()

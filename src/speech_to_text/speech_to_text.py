@@ -8,6 +8,7 @@ import threading
 import queue
 import time
 
+
 class SpeechToText:
     def __init__(
         self,
@@ -29,41 +30,6 @@ class SpeechToText:
         self.prompt_available = threading.Semaphore(0)
         self.noise_profile: np.ndarray
 
-    def process_audio(self, buffer: List[np.ndarray]) -> None:
-        if not buffer:
-            return
-
-        audio_data: np.ndarray = np.concatenate(buffer, axis=0)
-        input_buffer: io.BytesIO = io.BytesIO()
-        sf.write(input_buffer, audio_data, self.SAMPLE_RATE, format="WAV")
-        input_buffer.seek(0)
-        audio_array, _ = sf.read(input_buffer, dtype="float32")
-
-        result: dict = self.model.transcribe(audio_array, language="en")
-        self.transcriptions.put(result["text"])
-        self.prompt_available.release()
-
-    def record_audio(self) -> None:
-        self.running = True
-        while self.running:
-            chunk: np.ndarray = self.record_chunk()
-            if np.abs(chunk).mean() >= self.THRESHOLD:
-                buffer: List[np.ndarray] = [chunk]
-                silence_start: Optional[float] = None
-
-                while self.running:
-                    chunk = self.record_chunk()
-                    buffer.append(chunk)
-                    if np.abs(chunk).mean() < self.THRESHOLD:
-                        if silence_start is None:
-                            silence_start = time.time()
-                        elif time.time() - silence_start >= self.SILENCE_DURATION:
-                            self.audio_queue.put(buffer)
-                            self.audio_to_process.release()
-                            break
-                    else:
-                        silence_start = None
-
     def reduce_noise(self, chunk: np.ndarray) -> np.ndarray:
         return np.clip(chunk - self.noise_profile, -32768, 32767).astype(np.int16)
 
@@ -76,10 +42,6 @@ class SpeechToText:
         )
         sd.wait()
         return self.reduce_noise(chunk)
-
-    def get_prompt(self) -> Optional[str]:
-        self.prompt_available.acquire()
-        return self.transcriptions.get()
 
     def calculate_noise_level(self) -> None:
         print("Listening for 10 seconds to calculate noise level...")
@@ -94,13 +56,43 @@ class SpeechToText:
         self.THRESHOLD = np.abs(self.reduce_noise(noise_chunk)).mean()
         print(f"Threshold: {self.THRESHOLD}")
 
-    def start(self) -> None:
-        if not self.THRESHOLD:
-            self.calculate_noise_level()
+    def process_audio(self, buffer: List[np.ndarray]) -> None:
+        if not buffer:
+            return
 
+        audio_data: np.ndarray = np.concatenate(buffer, axis=0)
+        input_buffer: io.BytesIO = io.BytesIO()
+        sf.write(input_buffer, audio_data, self.SAMPLE_RATE, format="WAV")
+        input_buffer.seek(0)
+        audio_array, _ = sf.read(input_buffer, dtype="float32")
+
+        result: dict = self.model.transcribe(audio_array, language="en")
+        self.transcriptions.put(result["text"])
+        self.prompt_available.release()
+
+    def record_audio(self, starting_chunk) -> None:
+        buffer: List[np.ndarray] = [starting_chunk]
+        silence_start: Optional[float] = None
+
+        while self.running:
+            chunk = self.record_chunk()
+            buffer.append(chunk)
+            if np.abs(chunk).mean() < self.THRESHOLD:
+                if silence_start is None:
+                    silence_start = time.time()
+                elif time.time() - silence_start >= self.SILENCE_DURATION:
+                    self.audio_queue.put(buffer)
+                    self.audio_to_process.release()
+                    break
+            else:
+                silence_start = None
+
+    def listen_audio(self) -> None:
         self.running = True
-        threading.Thread(target=self.record_audio).start()
-        threading.Thread(target=self.process_queue).start()
+        while self.running:
+            chunk: np.ndarray = self.record_chunk()
+            if np.abs(chunk).mean() >= self.THRESHOLD:
+                self.record_audio(chunk)
 
     def process_queue(self) -> None:
         self.audio_to_process.acquire()
@@ -109,6 +101,18 @@ class SpeechToText:
             self.process_audio(buffer)
             self.audio_to_process.acquire()
 
+    def start(self) -> None:
+        if not self.THRESHOLD:
+            self.calculate_noise_level()
+
+        self.running = True
+        threading.Thread(target=self.listen_audio).start()
+        threading.Thread(target=self.process_queue).start()
+
     def stop(self) -> None:
         self.running = False
         self.audio_to_process.release()
+
+    def get_prompt(self) -> Optional[str]:
+        self.prompt_available.acquire()
+        return self.transcriptions.get()
