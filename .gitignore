@@ -5,6 +5,7 @@ __pycache__/
 
 test_audio/
 venv*
+vectorStore
 
 # C extensions
 *.so
