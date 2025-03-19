@@ -33,9 +33,6 @@ def main():
         play_obj.wait_done()
         print("Audio played")
         
-        # os.remove("test_audio/my_audio.wav")
-        # os.remove("test_audio/parler_tts_out.wav")
-        
         
 if __name__ == "__main__":
     main()

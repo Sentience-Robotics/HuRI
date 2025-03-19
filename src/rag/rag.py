@@ -53,20 +53,8 @@ class Rag:
         response = self.qaChain.invoke({"history": history, "input": question})
         answer = response["answer"]
         self.conversation_log["conversation"].append({"question": question, "answer": answer})
-
         return answer
     
     def saveConversation(self, filename="conversation_log.json"):
         with open(filename, "w") as f:
             json.dump(self.conversation_log, f, indent=4)
-
-def test_main():
-    rag = Rag(vectorstorePath=f"./src/rag/vectorStore")
-    rag.ragLoader(f"./tests/rag/docsRag", "txt")
-    print(rag.ragQuestion("My name is John and what is the capital of Spain?"))
-    print("--------------------")
-    print(rag.ragQuestion("What is my name?"))
-    print(rag.ragQuestion("What where my previous questions?"))
-    
-if __name__ == "__main__":
-    test_main()
