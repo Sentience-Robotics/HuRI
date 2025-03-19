@@ -6,6 +6,7 @@ from speech_to_text.recorder import listen_for_keyword
 from text_to_speech.tts import get_tts_model, tokenize_text, get_tts_tokenizer
 import soundfile as sf
 import simpleaudio as sa
+from speech_to_text.speech_to_text import SpeechToText
 
 def main():
     ollama = get_chain()
@@ -33,6 +34,23 @@ def main():
         play_obj.wait_done()
         print("Audio played")
         
-        
+
+
+def main_2():
+    stt = SpeechToText()
+    stt.start()
+    try:
+        while True:
+            prompt = stt.get_prompt()
+            print(prompt)
+            if "bye bye" in prompt.lower():
+                stt.stop()
+                break
+
+    except KeyboardInterrupt:
+        print("CTRL+C detected. Stopping the program.")
+    stt.stop()
+
+
 if __name__ == "__main__":
     main()

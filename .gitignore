@@ -3,9 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+test_audio/
+venv*
+test_audio/
+
 # C extensions
 *.so
-test_audio/
 
 # Distribution / packaging
 .Python

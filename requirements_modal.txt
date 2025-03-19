@@ -1,0 +1,12 @@
+soundfile
+numpy
+ollama
+SpeechRecognition==3.14.1
+torch
+langchain_core>=0.1.36
+langchain>=0.1.17
+langchain_ollama>=0.0.7
+parler_tts==0.2.3
+pydantic<2.0
+transformers==4.46.1
+whisper @ git+https://github.com/zhuzilin/whisper-openvino.git@cc2f13074ff8a0cd43fe3f574285b2308baf55ec
