@@ -27,9 +27,6 @@ class SpeechToText:
         self.transcriptions: queue.Queue = queue.Queue()
         self.audio_to_process = threading.Semaphore(0)
         self.prompt_available = threading.Semaphore(0)
-        self.filter_func: Optional[Callable[[np.ndarray, int], np.ndarray]] = (
-            filter_func
-        )
         self.noise_profile: np.ndarray
 
     def process_audio(self, buffer: List[np.ndarray]) -> None:
@@ -39,7 +36,6 @@ class SpeechToText:
         audio_data: np.ndarray = np.concatenate(buffer, axis=0)
         input_buffer: io.BytesIO = io.BytesIO()
         sf.write(input_buffer, audio_data, self.SAMPLE_RATE, format="WAV")
-        # sf.write("test.wav", audio_data, self.SAMPLE_RATE, format="WAV")
         input_buffer.seek(0)
         audio_array, _ = sf.read(input_buffer, dtype="float32")
 
