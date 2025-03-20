@@ -4,7 +4,10 @@ __pycache__/
 *$py.class
 
 test_audio/
+tests_audio/
 venv*
+vectorStore
+docsRag/
 
 # C extensions
 *.so
