@@ -1,9 +1,6 @@
 import os
 
 from enum import Enum
-from llm.llm import get_chain
-# from speech_to_text.recorder import listen_for_keyword
-# from text_to_speech.tts import get_tts_model, tokenize_text, get_tts_tokenizer
 import soundfile as sf
 import simpleaudio as sa
 from speech_to_text.speech_to_text import SpeechToText
