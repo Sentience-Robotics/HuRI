@@ -7,11 +7,13 @@ from speech_to_text.speech_to_text import SpeechToText
 from text_to_speech.tts import TextToSpeech
 from rag.rag import Rag
 
+
 class Modes(Enum):
     EXIT = 0
     LLM = 1
     CONTEXT = 2
     RAG = 3
+
 
 def loop(stt: SpeechToText, tts: TextToSpeech, mode: Modes, mode_function: dict):
     while mode:
@@ -29,11 +31,12 @@ def loop(stt: SpeechToText, tts: TextToSpeech, mode: Modes, mode_function: dict)
             continue
         else:
             answer = mode_function[mode](prompt)
-            tts.speak(answer)
+            tts.speak(answer, language='en', speaker_wav=['ref_basile.wav'])
+
 
 def main():
     stt = SpeechToText()
-    tts = TextToSpeech('tts_models--en--ljspeech--tacotron2-DDC')
+    tts = TextToSpeech("tts_models--multilingual--multi-dataset--xtts_v2")
     rag = Rag(model="deepseek-v2:16b")
     # rag.ragLoader("tests/rag/docsRag", "txt")
     mode = Modes.LLM
