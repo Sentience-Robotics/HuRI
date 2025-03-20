@@ -26,6 +26,7 @@ class SpeechToText:
         self.running: bool = False
         self.audio_queue: queue.Queue = queue.Queue()
         self.transcriptions: queue.Queue = queue.Queue()
+        self.pause_record = threading.Semaphore(1)
         self.audio_to_process = threading.Semaphore(0)
         self.prompt_available = threading.Semaphore(0)
         self.noise_profile: np.ndarray
@@ -34,6 +35,7 @@ class SpeechToText:
         return np.clip(chunk - self.noise_profile, -32768, 32767).astype(np.int16)
 
     def record_chunk(self) -> np.ndarray:
+        self.pause_record.acquire()
         chunk: np.ndarray = sd.rec(
             int(self.CHUNK_DURATION * self.SAMPLE_RATE),
             samplerate=self.SAMPLE_RATE,
@@ -41,6 +43,7 @@ class SpeechToText:
             dtype="int16",
         )
         sd.wait()
+        self.pause_record.release()
         return self.reduce_noise(chunk)
 
     def calculate_noise_level(self) -> None:
@@ -108,6 +111,12 @@ class SpeechToText:
         self.running = True
         threading.Thread(target=self.listen_audio).start()
         threading.Thread(target=self.process_queue).start()
+
+    def pause(self, true: bool = True) -> None:
+        if true:
+            self.pause_record.acquire()
+        else:
+            self.pause_record.release()
 
     def stop(self) -> None:
         self.running = False

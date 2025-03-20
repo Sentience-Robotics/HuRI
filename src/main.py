@@ -30,15 +30,17 @@ def loop(stt: SpeechToText, tts: TextToSpeech, mode: Modes, mode_function: dict)
         elif prompt.strip() == "":
             continue
         else:
+            stt.pause()
             answer = mode_function[mode](prompt)
             tts.speak(answer, language='en', speaker_wav=['ref_basile.wav'])
+            stt.pause(False)
 
 
 def main():
     stt = SpeechToText()
     tts = TextToSpeech("tts_models--multilingual--multi-dataset--xtts_v2")
     rag = Rag(model="deepseek-v2:16b")
-    # rag.ragLoader("tests/rag/docsRag", "txt")
+    rag.ragLoader("tests/rag/docsRag", "txt")
     mode = Modes.LLM
     mode_function = {
         Modes.LLM: rag.ragQuestion,
