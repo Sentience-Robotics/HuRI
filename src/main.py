@@ -40,7 +40,8 @@ def main():
     mode = Modes.LLM
     mode_function = {
         Modes.LLM: rag.ragQuestion,
-        Modes.RAG: rag.ragLoader
+        Modes.RAG: rag.ragLoader,
+        Modes.CONTEXT: lambda x: "Context mode not implemented yet.",
     }
     stt.start()
     try:
