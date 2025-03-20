@@ -4,6 +4,7 @@ from enum import Enum
 import soundfile as sf
 import simpleaudio as sa
 from speech_to_text.speech_to_text import SpeechToText
+from text_to_speech.tts import TextToSpeech
 from rag.rag import Rag
 
 class Modes(Enum):
@@ -12,7 +13,7 @@ class Modes(Enum):
     CONTEXT = 2
     RAG = 3
 
-def loop(stt: SpeechToText, mode: Modes, mode_function: dict):
+def loop(stt: SpeechToText, tts: TextToSpeech, mode: Modes, mode_function: dict):
     while mode:
         prompt = stt.get_prompt()
         print(prompt)
@@ -28,12 +29,13 @@ def loop(stt: SpeechToText, mode: Modes, mode_function: dict):
             continue
         else:
             answer = mode_function[mode](prompt)
-            print(answer)
-        
+            tts.speak(answer)
+
 def main():
     stt = SpeechToText()
+    tts = TextToSpeech('tts_models--en--ljspeech--tacotron2-DDC')
     rag = Rag(model="deepseek-v2:16b")
-    rag.ragLoader("tests/rag/docsRag", "txt")
+    # rag.ragLoader("tests/rag/docsRag", "txt")
     mode = Modes.LLM
     mode_function = {
         Modes.LLM: rag.ragQuestion,
@@ -42,7 +44,7 @@ def main():
     }
     stt.start()
     try:
-        loop(stt, mode, mode_function)
+        loop(stt, tts, mode, mode_function)
     except KeyboardInterrupt:
         print("CTRL+C detected. Stopping the program.")
     except Exception as e:
