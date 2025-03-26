@@ -1,10 +1,10 @@
-import os
-
 from enum import Enum
 import soundfile as sf
 import simpleaudio as sa
+from emotional_hub.input_analysis import predict_emotion
 from speech_to_text.speech_to_text import SpeechToText
 from rag.rag import Rag
+
 
 class Modes(Enum):
     EXIT = 0
@@ -12,9 +12,10 @@ class Modes(Enum):
     CONTEXT = 2
     RAG = 3
 
-def loop(stt: SpeechToText, mode: Modes, mode_function: dict):
+
+def loop(stt: SpeechToText, tts: None, mode: Modes, mode_function):
     while mode:
-        prompt = stt.get_prompt()
+        prompt, audio = stt.get_prompt()
         print(prompt)
         if "switch llm" in prompt.lower():
             mode = Modes.LLM
@@ -27,9 +28,14 @@ def loop(stt: SpeechToText, mode: Modes, mode_function: dict):
         elif prompt.strip() == "":
             continue
         else:
-            answer = mode_function[mode](prompt)
+            stt.pause()
+            emotion = predict_emotion(audio)
+            print("Predicted Emotion:", emotion)
+            answer = mode_function[mode](f"in a {emotion} emotion: {prompt}")
             print(answer)
-        
+            stt.pause(False)
+
+
 def main():
     stt = SpeechToText()
     rag = Rag(model="deepseek-v2:16b")
@@ -42,7 +48,7 @@ def main():
     }
     stt.start()
     try:
-        loop(stt, mode, mode_function)
+        loop(stt, None, mode, mode_function)
     except KeyboardInterrupt:
         print("CTRL+C detected. Stopping the program.")
     except Exception as e:
