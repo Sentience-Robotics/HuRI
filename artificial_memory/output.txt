@@ -1,0 +1,4 @@
+ {
+    "info": "The user is at a school with a jury today.", // Approximately 1 week because the user might be going to school several times within that period and the information may still be relevant.
+    "time": 60*60*24*7,  "why": "This is short term because it's about a current event."
+   }
