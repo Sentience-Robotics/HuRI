@@ -21,14 +21,14 @@ class Module:
         self.poller = threading.Thread(target=self._poll_loop, daemon=True)
 
     def subscribe(self, topic: str, callback: Callable) -> None:
-        sub = self.ctx.socket(zmq.SUB)
-        sub.connect(XPUB_ENDPOINT)
-        sub.setsockopt_string(zmq.SUBSCRIBE, topic)
-        self.subs[topic] = sub
+        sub_socket = self.ctx.socket(zmq.SUB)
+        sub_socket.connect(XPUB_ENDPOINT)
+        sub_socket.setsockopt_string(zmq.SUBSCRIBE, topic)
+        self.subs[topic] = sub_socket
         self.callbacks[topic] = callback
 
     def publish(self, topic: str, msg: str) -> None:
-        self.pub_socket.send_string(f"{topic} {msg}")
+        self.pub_socket.send_multipart([topic.encode(), msg.encode()])
 
     def start_polling(self) -> None:
         self._running = True
@@ -43,22 +43,22 @@ class Module:
             events = dict(poller.poll(100))
             for _, sub in self.subs.items():
                 if sub in events:
-                    topic_msg = sub.recv_string()
-                    topic, msg = topic_msg.split(" ", 1)
-                    self.callbacks[topic](msg)
+                    topic, msg = sub.recv_multipart()
+                    self.callbacks[topic.decode()](msg.decode())
 
     def run(self, stop_event: Event = None) -> None:
         """
         Default run: waits for events.
-        Child classes can override `_run()` for active behavior.
+        Child classes can override `loop()` for active behavior.
         """
-        self.start_polling()
+        if self.subs != {}:
+            self.start_polling()
         try:
-            self._run(stop_event)
+            self.loop(stop_event)
         finally:
             self.stop()
 
-    def _run(self, stop_event: Event = None) -> None:
+    def loop(self, stop_event: Event = None) -> None:
         """Child modules override this instead of run(). Default: idle wait."""
         while stop_event is None or not stop_event.is_set():
             time.sleep(0.1)
@@ -67,8 +67,9 @@ class Module:
         """Stop the module gracefully."""
 
         # Close poller daemon
-        self._running = False
-        self.poller.join()
+        if self._running:
+            self._running = False
+            self.poller.join()
 
         for topic, sub in self.subs.items():
             try:

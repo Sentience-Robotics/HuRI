@@ -1,14 +1,15 @@
 import multiprocessing as mp
+import time
 from multiprocessing.synchronize import Event
-from typing import List, Dict
+from typing import Dict, List
 
 from .event_router import EventRouter
 from .module import Module
 
 
 class ModuleManager:
-    def __init__(self, modules: List[Module]):
-        self.modules: List[Module] = modules
+    def __init__(self, modules: Dict[str, Module]):
+        self.modules: Dict[str, Module] = modules
 
         self.processes: Dict[str, mp.Process] = {}
         self.router_process: mp.Process = None
@@ -22,25 +23,26 @@ class ModuleManager:
             target=lambda: EventRouter().start(), daemon=True
         )
         self.router_process.start()
+        time.sleep(0.01)
         print(f"[Manager] Router started (PID={self.router_process.pid})")
 
     @staticmethod
-    def _run_module(module: Module, stop_event: Event):
-        module.run(stop_event=stop_event)
+    def _run_module(module: Module, name: str, stop_event: Event):
+        module(name).run(stop_event=stop_event)
 
     def start(self):
         self._start_router()
-        for module in self.modules:
-            if module.name in self.processes:
+        for name, mod_cls in self.modules.items():
+            if name in self.processes:
                 continue
             stop_event = mp.Event()
             p = mp.Process(
-                target=self._run_module, args=(module, stop_event), daemon=True
+                target=self._run_module, args=(mod_cls, name, stop_event), daemon=True
             )
             p.start()
-            self.processes[module.name] = p
-            self.stop_events[module.name] = stop_event
-            print(f"[Manager] {module.name} started (PID={p.pid})")
+            self.processes[name] = p
+            self.stop_events[name] = stop_event
+            print(f"[Manager] {name} started (PID={p.pid})")
 
     def status(self):
         """Print status of all modules and router."""
@@ -51,13 +53,13 @@ class ModuleManager:
         else:
             print("- Router: not started")
 
-        for module in self.modules:
-            process = self.processes.get(module.name)
+        for name in self.modules:
+            process = self.processes.get(name)
             if process:
                 state = "alive" if process.is_alive() else "stopped"
-                print(f"- {module.name}: {state} (PID={process.pid})")
+                print(f"- {name}: {state} (PID={process.pid})")
             else:
-                print(f"- {module.name}: stopped")
+                print(f"- {name}: stopped")
         print("=====================")
 
     def stop(self, name):
