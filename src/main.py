@@ -1,60 +1,50 @@
-from enum import Enum
-import soundfile as sf
-import simpleaudio as sa
-from emotional_hub.input_analysis import predict_emotion
-from speech_to_text.speech_to_text import SpeechToText
-from rag.rag import Rag
+import time
+from multiprocessing.synchronize import Event
+from typing import Dict
+
+from src.module.module import Module
+from src.module.shell import ModuleManager, RobotShell
 
 
-class Modes(Enum):
-    EXIT = 0
-    LLM = 1
-    CONTEXT = 2
-    RAG = 3
+class TTSModule(Module):
+    def __init__(self, name="TTS"):
+        super().__init__(name)
+        self.subscribe("llm.response", self.on_llm_response)
+
+    def on_llm_response(self, msg):
+        print(f"[{self.name}] parle ->", msg)
 
 
-def loop(stt: SpeechToText, tts: None, mode: Modes, mode_function):
-    while mode:
-        prompt, audio = stt.get_prompt()
-        print(prompt)
-        if "switch llm" in prompt.lower():
-            mode = Modes.LLM
-        elif "switch context" in prompt.lower():
-            mode = Modes.CONTEXT
-        elif "switch rag" in prompt.lower():
-            mode = Modes.RAG
-        elif "bye bye" in prompt.lower():
-            mode = Modes.EXIT
-        elif prompt.strip() == "":
-            continue
-        else:
-            stt.pause()
-            emotion = predict_emotion(audio)
-            print("Predicted Emotion:", emotion)
-            answer = mode_function[mode](f"in a {emotion} emotion: {prompt}")
-            print(answer)
-            stt.pause(False)
+class LLMModule(Module):
+    def __init__(self, name="LLM"):
+        super().__init__(name)
+        self.subscribe("speech.in", self.on_speech)
+
+    def on_speech(self, msg):
+        reponse = f"Réponse à '{msg}'"
+        print(f"[{self.name}] ->", reponse)
+        self.publish("llm.response", reponse)
 
 
-def main():
-    stt = SpeechToText()
-    rag = Rag(model="deepseek-v2:16b")
-    rag.ragLoader("tests/rag/docsRag", "txt")
-    mode = Modes.LLM
-    mode_function = {
-        Modes.LLM: rag.ragQuestion,
-        Modes.RAG: rag.ragLoader,
-        Modes.CONTEXT: lambda x: "Context mode not implemented yet.",
-    }
-    stt.start()
-    try:
-        loop(stt, None, mode, mode_function)
-    except KeyboardInterrupt:
-        print("CTRL+C detected. Stopping the program.")
-    except Exception as e:
-        print("Unexpected Error:", e)
-    stt.stop()
+class STTModule(Module):
+    def __init__(self, name="STT"):
+        super().__init__(name)
+
+    def loop(self, stop_event: Event = None):
+        i = 0
+        while stop_event is None or not stop_event.is_set():
+            phrase = f"Phrase numéro {i}"
+            print(f"[{self.name}] ->", phrase)
+            self.publish("speech.in", phrase)
+            i += 1
+            time.sleep(2)
 
 
 if __name__ == "__main__":
-    main()
+    modules: Dict[str, Module] = {"STT": STTModule, "TTS": TTSModule, "LLM": LLMModule}
+    manager = ModuleManager(modules)
+    manager.start()
+    try:
+        RobotShell(manager).cmdloop()
+    except KeyboardInterrupt:
+        pass
