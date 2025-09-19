@@ -1,7 +1,7 @@
 import logging
 import multiprocessing as mp
 from logging.handlers import QueueHandler, QueueListener
-from typing import IO, Optional, Dict
+from typing import IO, Dict, Optional
 
 
 def setup_handler(
