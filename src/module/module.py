@@ -1,15 +1,18 @@
+import multiprocessing as mp
 import threading
 import time
 from multiprocessing.synchronize import Event
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 import zmq
+
+from src.tools.logger import logging, setup_logger
 
 from .event_router import XPUB_ENDPOINT, XSUB_ENDPOINT
 
 
 class Module:
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, logger: Optional[logging.Logger] = None) -> None:
         self.name = name
         self.ctx = zmq.Context()
         self.pub_socket = self.ctx.socket(zmq.PUB)
@@ -20,6 +23,8 @@ class Module:
         self._running = False
         self.poller = threading.Thread(target=self._poll_loop, daemon=True)
 
+        self.logger = logger or logging.getLogger(self.name)
+
     def subscribe(self, topic: str, callback: Callable) -> None:
         sub_socket = self.ctx.socket(zmq.SUB)
         sub_socket.connect(XPUB_ENDPOINT)
@@ -29,6 +34,7 @@ class Module:
 
     def publish(self, topic: str, msg: str) -> None:
         self.pub_socket.send_multipart([topic.encode(), msg.encode()])
+        self.logger.info(f"Publish: {topic} {msg}")
 
     def start_polling(self) -> None:
         self._running = True
@@ -44,7 +50,10 @@ class Module:
             for _, sub in self.subs.items():
                 if sub in events:
                     topic, msg = sub.recv_multipart()
-                    self.callbacks[topic.decode()](msg.decode())
+                    topic_str = topic.decode()
+                    msg_str = msg.decode()
+                    self.logger.info(f"Receive: {topic_str} {msg_str}")
+                    self.callbacks[topic_str](msg_str)
 
     def run(self, stop_event: Event = None) -> None:
         """
@@ -55,6 +64,10 @@ class Module:
             self.start_polling()
         try:
             self.loop(stop_event)
+        except KeyboardInterrupt:
+            self.logger.info("Ctrl+C pressed, exiting cleanly")
+        except Exception as e:
+            self.logger.error(e)
         finally:
             self.stop()
 
@@ -66,7 +79,6 @@ class Module:
     def stop(self) -> None:
         """Stop the module gracefully."""
 
-        # Close poller daemon
         if self._running:
             self._running = False
             self.poller.join()
@@ -75,23 +87,19 @@ class Module:
             try:
                 sub.close(0)
             except Exception as e:
-                print(f"[{self.name}] Error closing SUB socket for '{topic}': {e}")
+                self.logger.error(f"Error closing SUB socket for '{topic}': {e}")
 
         self.subs.clear()
         self.callbacks.clear()
 
-        # Close publisher socket
-        if hasattr(self, "pub_socket"):
-            try:
-                self.pub_socket.close(0)
-            except Exception as e:
-                print(f"[{self.name}] Error closing PUB socket: {e}")
+        try:
+            self.pub_socket.close(0)
+        except Exception as e:
+            self.logger.error(f"Error closing SUB socket for '{topic}': {e}")
 
-        # Terminate the context
-        if hasattr(self, "ctx"):
-            try:
-                self.ctx.term()
-            except Exception as e:
-                print(f"[{self.name}] Error terminating ZMQ context: {e}")
+        try:
+            self.ctx.term()
+        except Exception as e:
+            self.logger.error(f"Error terminating ZMQ context: {e}")
 
-        print(f"[{self.name}] Module stopped gracefully.")
+        self.logger.info(f"Module stopped gracefully.")
