@@ -1,48 +1,118 @@
 import multiprocessing as mp
+import signal
 import time
 from multiprocessing.synchronize import Event
 from typing import Dict, List
+
+from src.tools.logger import (LevelFilter, QueueListener, logging,
+                              setup_log_listener, setup_logger)
 
 from .event_router import EventRouter
 from .module import Module
 
 
 class ModuleManager:
+    """Control Modules, Inter-Module communication and Logging"""
+
     def __init__(self, modules: Dict[str, Module]):
         self.modules: Dict[str, Module] = modules
 
-        self.processes: Dict[str, mp.Process] = {}
         self.router_process: mp.Process = None
-        self.stop_events = {}
+        self.processes: Dict[str, mp.Process] = {}
+        self.stop_events: Dict[str, Event] = {}
 
-    def _start_router(self):
+        self.log_queue = mp.Queue()
+        self.logger = setup_logger("HuRI", log_queue=self.log_queue)
+        self.level_filter = LevelFilter(logging.DEBUG)
+        self.log_listener: QueueListener = setup_log_listener(
+            self.log_queue, self.level_filter
+        )
+
+    def _start_event_router(self) -> None:
+        """Used to handle inter-module communication, though events"""
         if self.router_process and self.router_process.is_alive():
             return
 
+        logger = setup_logger("EventRouter", log_queue=self.log_queue)
         self.router_process = mp.Process(
-            target=lambda: EventRouter().start(), daemon=True
+            target=lambda: EventRouter(logger).start(), daemon=True
         )
+        self.level_filter.add_level("EventRouter")
         self.router_process.start()
         time.sleep(0.01)
-        print(f"[Manager] Router started (PID={self.router_process.pid})")
+        self.logger.info(f"Router started (PID={self.router_process.pid})")
 
     @staticmethod
-    def _run_module(module: Module, name: str, stop_event: Event):
-        module(name).run(stop_event=stop_event)
+    def _run_module(
+        mod_cls: Module, name: str, log_queue: mp.Queue, stop_event: Event
+    ) -> None:
+        logger = setup_logger(name, log_queue=log_queue)
+
+        def handle_sigint(signum, frame):
+            logger.info(f"Ctrl+C ignored in child module")
+
+        signal.signal(signal.SIGINT, handle_sigint)
+
+        module: Module = mod_cls(name, logger=logger)
+        module.run(stop_event=stop_event)
 
     def start(self):
-        self._start_router()
-        for name, mod_cls in self.modules.items():
-            if name in self.processes:
-                continue
-            stop_event = mp.Event()
-            p = mp.Process(
-                target=self._run_module, args=(mod_cls, name, stop_event), daemon=True
+        """Start event router and modules"""  # TODO config (also logs levels)
+        self.log_listener.start()
+        self._start_event_router()
+        for name in self.modules:
+            self.start_module(name)
+
+    def start_module(self, name):
+        if name not in self.modules:
+            self.logger.warning(
+                f"{name} is not in the registered Modules: {self.modules.keys()}"
             )
-            p.start()
-            self.processes[name] = p
-            self.stop_events[name] = stop_event
-            print(f"[Manager] {name} started (PID={p.pid})")
+            return
+        if name in self.processes:
+            self.logger.warning(
+                f"{name} is already running (PID={self.processes[name].pid})"
+            )
+            return
+
+        mod_cls = self.modules[name]
+        stop_event = mp.Event()
+        p = mp.Process(
+            target=self._run_module,
+            args=(mod_cls, name, self.log_queue, stop_event),
+            daemon=True,
+        )
+        self.processes[name] = p
+        self.stop_events[name] = stop_event
+        self.level_filter.add_level(name)
+
+        p.start()
+        self.logger.info(f"{name} ({mod_cls}) started (PID={p.pid})")
+
+    def stop_module(self, name):
+        if name in self.processes:
+            self.logger.info(f"Stopping {name}...")
+            self.stop_events[name].set()
+            self.processes[name].join(timeout=5)
+            if self.processes[name].is_alive():
+                self.logger.warning(f"{name} did not stop in time, killing")
+                self.processes[name].kill()
+            self.logger.info(f"{name} stopped")
+            del self.processes[name]
+            del self.stop_events[name]
+            self.level_filter.del_level(name)
+
+    def stop_all(self):
+        for name in list(self.processes.keys()):
+            self.stop_module(name)
+        if self.router_process and self.router_process.is_alive():
+            self.logger.info("Stopping router...")
+            self.router_process.terminate()
+            self.router_process.join(timeout=5)
+            self.level_filter.del_level("EventRouter")
+            self.logger.info("Router stopped")
+
+        self.log_listener.stop()
 
     def status(self):
         """Print status of all modules and router."""
@@ -62,23 +132,19 @@ class ModuleManager:
                 print(f"- {name}: stopped")
         print("=====================")
 
-    def stop(self, name):
-        if name in self.processes:
-            print(f"[Manager] Stopping {name}...")
-            self.stop_events[name].set()
-            self.processes[name].join(timeout=5)
-            if self.processes[name].is_alive():
-                print(f"[Manager] {name} did not stop in time, killing")
-                self.processes[name].kill()
-            print(f"[Manager] {name} stopped")
-            del self.processes[name]
-            del self.stop_events[name]
+    def set_root_log_level(self, level: int) -> None:
+        self.level_filter.set_root_level(level)
 
-    def stop_all(self):
-        for name in list(self.processes.keys()):
-            self.stop(name)
-        if self.router_process and self.router_process.is_alive():
-            print("[Manager] Stopping router...")
-            self.router_process.terminate()
-            self.router_process.join(timeout=5)
-            print("[Manager] Router stopped")
+    def set_log_level(self, name: str, level: int) -> None:
+        self.level_filter.set_level(name, level)
+
+    def set_log_levels(self, name: str, level: int) -> None:
+        self.level_filter.set_levels(level)
+
+    def log_status(self) -> None:
+        """Print status of all modules and router."""
+        print("=== Log Status ===")
+        print(f"Root level: {logging.getLevelName(self.level_filter.root_level)}")
+        for name, lvl in self.level_filter.log_levels.items():
+            print(f"- {name}: {logging.getLevelName(lvl)}")
+        print("=====================")
