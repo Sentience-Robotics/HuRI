@@ -62,7 +62,7 @@ class LevelFilter(logging.Filter):
         """the root level has priority over custom levels"""
         level = self.log_levels.get(record.name, self.root_level)
 
-        return self.root_level < record.levelno and level < record.levelno
+        return self.root_level <= record.levelno and level <= record.levelno
 
     def set_root_level(self, level: int) -> None:
         self.root_level = level
