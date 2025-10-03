@@ -2,7 +2,7 @@ import multiprocessing as mp
 import signal
 import time
 from multiprocessing.synchronize import Event
-from typing import Dict, List
+from typing import Dict
 
 from src.tools.logger import (LevelFilter, QueueListener, logging,
                               setup_log_listener, setup_logger)
@@ -43,27 +43,22 @@ class ModuleManager:
         self.logger.info(f"Router started (PID={self.router_process.pid})")
 
     @staticmethod
-    def _run_module(
-        mod_cls: Module, name: str, log_queue: mp.Queue, stop_event: Event
+    def _start_module(
+        module: Module, name: str, log_queue: mp.Queue, stop_event: Event
     ) -> None:
+        """Helper function to start module in child process."""
         logger = setup_logger(name, log_queue=log_queue)
+        module.set_custom_logger(logger)
 
         def handle_sigint(signum, frame):
             logger.info(f"Ctrl+C ignored in child module")
 
         signal.signal(signal.SIGINT, handle_sigint)
 
-        module: Module = mod_cls(name, logger=logger)
-        module.run(stop_event=stop_event)
-
-    def start(self):
-        """Start event router and modules"""  # TODO config (also logs levels)
-        self.log_listener.start()
-        self._start_event_router()
-        for name in self.modules:
-            self.start_module(name)
+        module.start_module(stop_event=stop_event)
 
     def start_module(self, name):
+        """Check if module is registered and not already running, and start a child process."""
         if name not in self.modules:
             self.logger.warning(
                 f"{name} is not in the registered Modules: {self.modules.keys()}"
@@ -75,11 +70,11 @@ class ModuleManager:
             )
             return
 
-        mod_cls = self.modules[name]
+        module = self.modules[name]
         stop_event = mp.Event()
         p = mp.Process(
-            target=self._run_module,
-            args=(mod_cls, name, self.log_queue, stop_event),
+            target=self._start_module,
+            args=(module, name, self.log_queue, stop_event),
             daemon=True,
         )
         self.processes[name] = p
@@ -87,7 +82,7 @@ class ModuleManager:
         self.level_filter.add_level(name)
 
         p.start()
-        self.logger.info(f"{name} ({mod_cls}) started (PID={p.pid})")
+        self.logger.info(f"{name} ({type(module)}) started (PID={p.pid})")
 
     def stop_module(self, name):
         if name in self.processes:
@@ -101,6 +96,13 @@ class ModuleManager:
             del self.processes[name]
             del self.stop_events[name]
             self.level_filter.del_level(name)
+
+    def start(self):
+        """Start event router and modules"""  # TODO config (also logs levels)
+        self.log_listener.start()
+        self._start_event_router()
+        for name in self.modules:
+            self.start_module(name)
 
     def stop_all(self):
         for name in list(self.processes.keys()):
