@@ -1,23 +1,27 @@
-from langchain_community.document_loaders import TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_ollama.embeddings import OllamaEmbeddings
-from langchain_ollama.llms import OllamaLLM
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langgraph.checkpoint.memory import MemorySaver
 import json
 import pathlib
 
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import TextLoader
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama.embeddings import OllamaEmbeddings
+from langchain_ollama.llms import OllamaLLM
+from langgraph.checkpoint.memory import MemorySaver
 
-class Rag:
+from src.module.module import Module
+
+
+class Rag(Module):
     def __init__(
         self,
-        model="deepseek-r1:7b",
-        collectionName="vectorStore",
-        vectorstorePath="src/rag/vectorStore",
+        model: str = "deepseek-r1:7b",
+        collectionName: str = "vectorStore",
+        vectorstorePath: str = "src/rag/vectorStore",
     ):
+        super().__init__()
         self.memory = MemorySaver()
         self.embeddings = OllamaEmbeddings(model=model)
         self.llm = OllamaLLM(model=model)
@@ -44,18 +48,19 @@ class Rag:
         self.conversation = []
         self.conversation_log = {"conversation": []}
 
-    def ragLoader(self, text: str):
+    def ragFill(self, text: str) -> None:
         self.documents += self.textSplitter.split_documents(text)
         self.vectorstore.add_documents(self.documents)
 
-    def ragLoader(self, pathFolder: str, fileType: str):
+    def ragLoad(self, folderPath: str, fileType: str) -> None:
         if fileType == "txt":
-            for file in pathlib.Path(pathFolder).rglob("*.txt"):
-                fileLoader = TextLoader(file_path=pathFolder + "/" + file.name)
+            for file in pathlib.Path(folderPath).rglob("*.txt"):
+                fileLoader = TextLoader(file_path=folderPath + "/" + file.name)
                 self.documents += self.textSplitter.split_documents(fileLoader.load())
         self.vectorstore.add_documents(self.documents)
 
-    def ragQuestion(self, question: str):
+    def ragQuestion(self, question: str) -> None:
+        self.logger.debug("question:", question)
         history = "\n".join(
             [
                 f"Human: {qa['question']}\nAI: {qa['answer']}"
@@ -64,13 +69,25 @@ class Rag:
         )
         helpingContext = "Answer with just your message like in a conversation. "
         question = helpingContext + question
+        self.logger.debug("full question:", question)
         response = self.qaChain.invoke({"history": history, "input": question})
         answer = response["answer"]
+        self.logger.debug("answer:", answer)
         self.conversation_log["conversation"].append(
             {"question": question.split(helpingContext)[1:], "answer": answer}
         )
-        return answer
+        self.publish("llm.response", answer)
 
-    def saveConversation(self, filename="conversation_log.json"):
+    def saveConversation(self, filename: str = "conversation_log.json"):
         with open(filename, "w") as f:
             json.dump(self.conversation_log, f, indent=4)
+
+    def set_subscriptions(self) -> None:
+        self.subscribe("rag.load", self.ragLoad)
+        self.subscribe("llm.in", self.ragQuestion)
+        self.subscribe("rag.in", self.ragFill)
+        self.subscribe("rag.save", self.saveConversation)
+
+    def run_module(self, stop_event=None) -> None:
+        self.ragLoad("tests/rag/docsRag", "txt")
+        super().run_module(stop_event)
