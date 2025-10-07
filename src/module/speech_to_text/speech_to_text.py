@@ -45,7 +45,7 @@ class SpeechToText(Module):
 
         result: dict = self.model.transcribe(audio_array, language="en")
         result["text"] = result["text"].strip()
-        if not result["text"]:
+        if not result["text"] or result["text"] == "":
             return
 
         self.publish("text.in", result["text"])

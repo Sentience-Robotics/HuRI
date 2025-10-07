@@ -82,14 +82,18 @@ class Module(ABC):
                     topic, content_type, payload = sub.recv_multipart()
                     topic_str = topic.decode()
                     content_type_str = content_type.decode()
+                    self.logger.info(f"Receive: {topic_str} {content_type_str}")
                     if content_type_str == "json":
-                        data = json.loads(payload.decode())
+                        kwargs = json.loads(payload.decode())
+                        self.callbacks[topic_str](
+                            **kwargs
+                        )  # TODO better and cleaner way ?
                     elif content_type_str == "bytes":
                         data = payload
+                        self.callbacks[topic_str](data)
                     elif content_type_str == "str":
                         data = payload.decode()
-                    self.logger.info(f"Receive: {topic_str} {content_type_str}")
-                    self.callbacks[topic_str](data)
+                        self.callbacks[topic_str](data)
 
     @final
     def start_module(self, stop_event: Event = None) -> None:

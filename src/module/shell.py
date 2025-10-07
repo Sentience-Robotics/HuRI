@@ -18,11 +18,11 @@ class RobotShell(cmd.Cmd):
 
     def do_start(self, arg):
         "Start a module."
-        self.manager.start(arg.strip())
+        self.manager.start_module(arg.strip())
 
     def do_stop(self, arg):
         "Stop a module."
-        self.manager.stop(arg.strip())
+        self.manager.stop_module(arg.strip())
 
     def do_exit(self, arg):
         "Exit HuRi."
