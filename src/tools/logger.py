@@ -84,7 +84,11 @@ class LevelFilter(logging.Filter):
         del self.log_levels[name]
 
 
-def setup_log_listener(log_queue: mp.Queue, filter: logging.Filter) -> QueueListener:
+def setup_log_listener(
+    log_queue: mp.Queue,
+    filter: logging.Filter,
+    custom_handler: Optional[logging.Handler] = None,
+) -> QueueListener:
     """
     Starts a central logging listener that reads LogRecords from a queue
     and emits them using normal loggers/handlers.
@@ -93,7 +97,7 @@ def setup_log_listener(log_queue: mp.Queue, filter: logging.Filter) -> QueueList
         "[%(asctime)s] [%(processName)s] [%(name)s] [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
-    handler = setup_handler(formatter=formatter)
+    handler = custom_handler or setup_handler(formatter=formatter)
     handler.addFilter(filter)
 
     listener = QueueListener(log_queue, handler)
