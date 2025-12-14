@@ -11,7 +11,7 @@ from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_ollama.llms import OllamaLLM
 from langgraph.checkpoint.memory import MemorySaver
 
-from src.module.module import Module
+from src.core.module import Module
 
 
 class Rag(Module):

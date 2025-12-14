@@ -9,7 +9,7 @@ import sounddevice as sd
 import soundfile as sf
 import whisper
 
-from src.module.module import Event, Module
+from src.modules.module import Event, Module
 
 
 class SpeechToText(Module):
