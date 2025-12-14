@@ -1,6 +1,7 @@
 import multiprocessing as mp
 import threading
 import time
+from dataclasses import dataclass
 from typing import Dict
 
 from src.tools.logger import (
@@ -11,25 +12,53 @@ from src.tools.logger import (
     setup_logger,
 )
 
-from .zmq.event_proxy import EventProxy, ZMQEventPorts
-from .zmq.log_channel import LogPuller, ZMQLogPort
-from .zmq.control_channel import Router, ZMQRouterPort
+from .zmq.control_channel import Router
+from .zmq.event_proxy import EventProxy
+from .zmq.log_channel import LogPuller
 
 
-class HuRIConfig:
-    register_channel_ports: ZMQEventPorts
-    event_channel_ports: ZMQEventPorts
-    log_channel_port: ZMQEventPorts
-    log_level: int = logging.INFO
+@dataclass
+class RouterConfig:
+    port: int
+
+
+@dataclass
+class EventProxyConfig:
+    xsub: int
+    xpub: int
+
+
+@dataclass
+class LogPullerConfig:
+    port: int
+
+
+@dataclass
+class HuriConfig:
+    hostname: str
+    router: RouterConfig
+    event_proxy: EventProxyConfig
+    log_puller: LogPullerConfig
+
+    @classmethod
+    def from_dict(cls, raw: dict):
+        return cls(
+            hostname=raw["hostname"],
+            router=RouterConfig(**raw["router"]),
+            event_proxy=EventProxyConfig(**raw["event-proxy"]),
+            log_puller=LogPullerConfig(**raw["log-puller"]),
+        )
 
 
 class HuRI:
     """Wait for Agent to connect, handle module communication and Logging"""
 
-    def __init__(self) -> None:
-        self.router = Router(ZMQRouterPort(router="3000"))
-        self.event_proxy = EventProxy(ZMQEventPorts(xpub="5556", xsub="5555"))
-        self.log_channel = LogPuller(ZMQLogPort("8008"))
+    def __init__(self, config: HuriConfig) -> None:
+        self.router = Router(config.hostname, config.router.port)
+        self.event_proxy = EventProxy(
+            config.hostname, "", config.event_proxy.xpub, config.event_proxy.xsub
+        )
+        self.log_channel = LogPuller(config.hostname, config.log_puller.port)
 
         self.threads: Dict[str, threading.Thread] = {}
 
@@ -53,11 +82,9 @@ class HuRI:
         self.threads["LogChannel"].start()
 
     def run(self) -> None:
-        # self.log_listener.start()
         self._start_log_channel()
         self._start_router()
         self._start_event_proxy()
-        # self._start_log_channel()
 
         from src.core.shell import RobotShell
 
