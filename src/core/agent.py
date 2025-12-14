@@ -4,8 +4,8 @@ import sys
 import threading
 import time
 from multiprocessing.synchronize import Event
-from typing import Dict, List
-
+from typing import Dict, List, Any, Mapping
+from src.modules.factory import ModuleFactory
 import zmq
 
 from src.tools.logger import (
@@ -15,44 +15,109 @@ from src.tools.logger import (
     setup_log_listener,
     setup_logger,
 )
-
+from dataclasses import dataclass
 from .module import Module
-from .zmq.event_proxy import EventProxy, ZMQEventPorts
-from .zmq.log_channel import LogPusher, ZMQLogPort
-from .zmq.control_channel import Command, Dealer, ZMQRouterPort
+from .zmq.control_channel import Command, Dealer
+from .zmq.event_proxy import EventProxy
+from .zmq.log_channel import LogPusher
+from .huri import HuriConfig
 
-# class AgentConfig:
-#     huri_hostname: str
-#     huri_event_router_ports: ZMQEventPorts
-#     event_forwarder_ports: ZMQEventPorts
-#     log_level: int = logging.INFO
+
+@dataclass
+class ForwarderProxyConfig:
+    down_xsub: int
+    up_xpub: int
+
+    @classmethod
+    def from_dict(cls, raw: dict):
+        return cls(
+            down_xsub=raw["down-xsub"],
+            up_xpub=raw["up-xpub"],
+        )
+
+
+@dataclass
+class ModuleConfig:
+    name: str
+    args: Mapping[str, Any]
+    logging: int
+
+    @classmethod
+    def from_dict(cls, raw: dict):
+        level = logging._nameToLevel.get(
+            raw.get("logging", "INFO"),
+            logging.INFO,
+        )
+        return cls(
+            name=raw["name"],
+            args=raw.get("args", {}),
+            logging=level,
+        )
+
+
+@dataclass
+class AgentConfig:
+    id: str
+    hostname: str
+    huri: HuriConfig
+    logging: int
+    forwarder_proxy: ForwarderProxyConfig
+    modules: Dict[str, ModuleConfig]
+
+    @classmethod
+    def from_dict(cls, raw: dict):
+        level = logging._nameToLevel.get(
+            raw.get("logging", "INFO").upper(),
+            logging.INFO,
+        )
+        modules = {
+            module_id: ModuleConfig.from_dict(mod_raw)
+            for module_id, mod_raw in raw.get("modules", {}).items()
+        }
+        return cls(
+            id=raw["id"],
+            hostname=raw["hostname"],
+            huri=HuriConfig.from_dict(raw["huri"]),
+            forwarder_proxy=ForwarderProxyConfig.from_dict(raw["forwarder-proxy"]),
+            logging=level,
+            modules=modules,
+        )
 
 
 class Agent:
     """Control Modules and communication with HuRI"""
 
-    def __init__(self, modules: Dict[str, Module]) -> None:
-        self.modules: Dict[str, Module] = modules
+    def __init__(self, config: AgentConfig) -> None:
+        self.modules: Dict[str, ModuleConfig] = config.modules
 
         self.processes: Dict[str, mp.Process] = {}
         self.stop_events: Dict[str, Event] = {}
 
         self.threads: Dict[str, threading.Thread] = {}
 
-        self.log_pusher = LogPusher("tcp://localhost:8008")
+        self.log_pusher = LogPusher(
+            hostname=config.huri.hostname, port=config.huri.log_puller.port
+        )
 
         self.dealer = Dealer(
-            port=ZMQRouterPort(router="3000"),
+            hostname=config.huri.hostname,
+            port=config.huri.router.port,
             executor=self._command_handler,
             logger=setup_logger("Dealer", log_queue=self.log_pusher.log_queue),
         )
 
         self.up_proxy = EventProxy(
-            ports=ZMQEventPorts(xpub="5555", xsub="6666"),
+            hostname=config.hostname,
+            connect_hostname=config.huri.hostname,
+            xpub_port=config.huri.event_proxy.xsub,
+            xsub_port=config.forwarder_proxy.up_xpub,
             logger=setup_logger("UpProxy", log_queue=self.log_pusher.log_queue),
         )
         self.down_proxy = EventProxy(
-            ports=ZMQEventPorts(xpub="6665", xsub="5556"),
+            hostname=config.hostname,
+            connect_hostname=config.huri.hostname,
+            xpub_port=config.forwarder_proxy.down_xsub,
+            xsub_port=config.huri.event_proxy.xpub,
             logger=setup_logger("DownProxy", log_queue=self.log_pusher.log_queue),
         )
 
@@ -73,10 +138,14 @@ class Agent:
 
     @staticmethod
     def _start_module(
-        module: Module, name: str, log_queue: mp.Queue, stop_event: Event
+        name: str, module_config: ModuleConfig, log_queue: mp.Queue, stop_event: Event
     ) -> None:
         """Helper function to start module in child process."""
-        logger = setup_logger(name, log_queue=log_queue)
+        logger = setup_logger(
+            module_config.name, level=module_config.logging, log_queue=log_queue
+        )
+
+        module = ModuleFactory.create(name, module_config.args)
         module.set_custom_logger(logger)
 
         def handle_sigint(signum, frame):
@@ -99,11 +168,11 @@ class Agent:
             )
             return
 
-        module = self.modules[name]
+        module_config = self.modules[name]
         stop_event = mp.Event()
         p = mp.Process(
             target=self._start_module,
-            args=(module, name, self.log_pusher.log_queue, stop_event),
+            args=(name, module_config, self.log_pusher.log_queue, stop_event),
             daemon=True,
         )
         self.processes[name] = p
@@ -111,7 +180,7 @@ class Agent:
         self.log_pusher.level_filter.add_level(name)
 
         p.start()
-        self.logger.info(f"{name} ({type(module)}) started (PID={p.pid})")
+        self.logger.info(f"{name} ({module_config.name}) started (PID={p.pid})")
 
     def stop_module(self, name) -> None:
         if name in self.processes:

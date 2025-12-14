@@ -1,0 +1,35 @@
+id: agent-io
+hostname: localhost
+
+huri:
+  hostname: localhost
+  router:
+    port: 3000
+  event-proxy:
+    xsub: 5555
+    xpub: 5556
+  log-puller:
+    port: 8008
+
+dealer: # todo
+  heartbeat:
+    interval_ms: 1000
+    timeout_ms: 5000
+
+forwarder-proxy:
+  down-xsub: 6665
+  up-xpub: 6666
+
+logging: INFO
+
+modules:
+  mic:
+    name: mic
+    args:
+      sample_rate: 18000
+    logging: INFO
+  stt:
+    name: stt
+    args:
+      sample_rate: 18000
+    logging: INFO

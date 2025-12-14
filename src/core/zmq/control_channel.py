@@ -9,11 +9,6 @@ from src.tools.logger import logging, setup_logger
 
 
 @dataclass
-class ZMQRouterPort:
-    router: str
-
-
-@dataclass
 class Command:
     cmd: str  # "STOP", "START", "STATUS", ...
     args: List[Any]  # JSON-serializable arguments
@@ -44,12 +39,14 @@ class Result:
 class Router:
     def __init__(
         self,
-        port: ZMQRouterPort,
+        hostname: str,
+        port: int,
         logger: Optional[logging.Logger] = setup_logger("Router"),
     ):
 
         self.ctx = zmq.Context.instance()
         self.router = self.ctx.socket(zmq.ROUTER)
+        self.hostname = hostname
         self.port = port
 
         self.logger = logger or logging.getLogger(__name__)
@@ -57,7 +54,7 @@ class Router:
         self.dealers: Dict[bytes, bool] = {}
 
     def start(self):
-        self.router.bind(f"tcp://localhost:{self.port.router}")
+        self.router.bind(f"tcp://{self.hostname}:{self.port}")
         self.logger.info("Router started")
 
         try:
@@ -99,23 +96,25 @@ class Router:
 class Dealer:
     def __init__(
         self,
-        port: ZMQRouterPort,
+        hostname: str,
+        port: int,
         executor: Callable[[Command], bool],
         logger: Optional[logging.Logger] = None,
         identity: Optional[str] = None,
     ):
         self.ctx = zmq.Context.instance()
         self.dealer = self.ctx.socket(zmq.DEALER)
+
+        self.hostname = hostname
         self.port = port
 
         self.executor = executor
-        # Set explicit identity
         self.identity = (identity or str(uuid.uuid4())).encode()  # TODO agent name
 
         self.logger = logger or logging.getLogger(f"Dealer {self.identity}")
 
     def start(self):
-        self.dealer.connect(f"tcp://localhost:{self.port.router}")
+        self.dealer.connect(f"tcp://{self.hostname}:{self.port}")
         self.dealer.setsockopt(zmq.IDENTITY, self.identity)
         self.logger.info(f"Dealer started: {self.identity}")
 

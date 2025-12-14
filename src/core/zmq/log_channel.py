@@ -16,11 +16,6 @@ from src.tools.logger import (
 )
 
 
-@dataclass
-class ZMQLogPort:
-    port: str
-
-
 def record_to_dict(record: logging.LogRecord) -> Dict[str, Any]:
     return {
         "name": record.name,
@@ -65,59 +60,23 @@ def dict_to_record(data: Dict[str, Any]) -> logging.LogRecord:
     return record
 
 
-# @dataclass
-# class Log:
-#     asctime
-
-
-# class LogPusher:
-#     def __init__(
-#         self,
-#         ports: ZMQLogPort,
-#         logger: Optional[logging.Logger] = setup_logger("LogPusher"),
-#     ):
-
-#         self.ctx = zmq.Context.instance()
-#         self.push = self.ctx.socket(zmq.PUSH)
-#         self.push.connect(f"tcp://localhost:{ports.port}")
-
-#         self.log_queue = mp.Queue()
-#         self.logger = logger
-#         self.level_filter = LevelFilter(logging.DEBUG)
-#         self.log_listener: QueueListener = setup_log_listener(
-#             self.log_queue, self.level_filter
-#         )
-
-#     def get_log_queue(self) -> mp.Queue:
-#         return self.log_queue
-
-#     def set_log_level(self, level: int) -> None:
-#         pass
-
-#     def start(self):
-#         try:
-#             zmq.proxy(self.pull, self.push)
-#         except KeyboardInterrupt:
-#             self.logger.info("Ctrl+C pressed, exiting cleanly")
-#         except Exception as e:
-#             self.logger.error(e)
-
-
 class LogPuller:
     def __init__(
         self,
-        port: ZMQLogPort,
+        hostname: str,
+        port: int,
         logger: Optional[logging.Logger] = setup_logger("LogPuller"),
     ) -> None:
-
         self.ctx = zmq.Context.instance()
         self.pull = self.ctx.socket(zmq.PULL)
+
+        self.hostname = hostname
         self.port = port
 
         self.logger = logger or logging.getLogger(__name__)
 
     def start(self) -> None:
-        self.pull.bind(f"tcp://localhost:{self.port.port}")
+        self.pull.bind(f"tcp://{self.hostname}:{self.port}")
 
         self.logger.info("started")
         while True:
@@ -133,12 +92,15 @@ class LogPusher:
     class LogPusherHandler(logging.Handler):
         def __init__(
             self,
-            endpoint: str,
+            hostname: str,
+            port: int,
         ):
             super().__init__()
             self.ctx = zmq.Context.instance()
             self.socket = self.ctx.socket(zmq.PUSH)
-            self.endpoint = endpoint
+
+            self.hostname = hostname
+            self.port = port
 
         def emit(self, record: logging.LogRecord) -> None:
             try:
@@ -150,19 +112,20 @@ class LogPusher:
                 self.handleError(record)
 
         def start(self) -> None:
-            self.socket.connect(self.endpoint)
+            self.socket.connect(f"tcp://{self.hostname}:{self.port}")
 
         def stop(self) -> None:
             self.socket.close()
 
     def __init__(
         self,
-        endpoint: str,
+        hostname: str,
+        port: int,
     ):
 
         self.log_queue = mp.Queue()
 
-        self.log_handler = self.LogPusherHandler(endpoint)
+        self.log_handler = self.LogPusherHandler(hostname, port)
         self.level_filter = LevelFilter(logging.DEBUG)
         self.log_listener: QueueListener = setup_log_listener(
             self.log_queue, self.level_filter, self.log_handler
