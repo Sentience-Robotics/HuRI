@@ -6,7 +6,7 @@ from typing import List, Optional
 import numpy as np
 import sounddevice as sd
 
-from src.modules.module import Event, Module
+from src.core.module import Event, Module
 
 
 class RecordSpeech(Module):

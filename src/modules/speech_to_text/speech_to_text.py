@@ -9,7 +9,7 @@ import sounddevice as sd
 import soundfile as sf
 import whisper
 
-from src.modules.module import Event, Module
+from src.core.module import Event, Module
 
 
 class SpeechToText(Module):
@@ -20,6 +20,7 @@ class SpeechToText(Module):
         sample_rate: int = 16000,
     ):
         super().__init__()
+        print(model_name)
         if device == "cpu":
             import warnings
 
