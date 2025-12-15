@@ -52,3 +52,7 @@ class EventProxy:
     def stop(self) -> None:
         self.xsub.close(linger=0)
         self.xpub.close(linger=0)
+
+    def publish(self, topic: str, msg: str) -> None:
+        self.xpub.send_multipart([topic.encode(), "str".encode(), msg.encode()])
+        self.logger.info(f"Publish: {topic} str")

@@ -283,12 +283,6 @@ class Agent:
         for name in self.modules:
             self.start_module(name)
 
-        threading.Event().wait()
-
-        # def handle_sigint(sig, frame):
-        #     shutdown_event.set()
-
-        # shutdown_event = threading.Event()
-        # signal.signal(signal.SIGINT, handle_sigint)
-        # shutdown_event.wait()
-        # signal.signal(signal.SIGINT, handle_sigint)
+        while True:
+            data = input()
+            self.down_proxy.publish("std.in", data)
