@@ -17,7 +17,7 @@ from src.core.module import Module
 class Rag(Module):
     def __init__(
         self,
-        model: str = "deepseek-r1:7b",
+        model: str = "deepseek-v2:16b",
         collectionName: str = "vectorStore",
         vectorstorePath: str = "src/rag/vectorStore",
     ):

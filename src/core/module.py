@@ -93,7 +93,6 @@ class Module(ABC):
                         self.callbacks[topic_str](data)
                     elif content_type_str == "str":
                         data = payload.decode()
-                        self.logger.error(data)
                         self.callbacks[topic_str](data)
 
     @final

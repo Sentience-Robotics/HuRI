@@ -137,8 +137,6 @@ class Dealer:
         finally:
             self.dealer.close()
 
-        print("DEALER CLOSED")
-
     def execute(self, command: Command) -> bytes:
         """
         Execute command sent by Router

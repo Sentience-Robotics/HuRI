@@ -22,11 +22,9 @@ class Modes(Enum):
 
 
 class ModeController(Module):
-    def __init__(
-        self,
-    ):
+    def __init__(self, default_mode: Modes = Modes.LLM):
         super().__init__()
-        self.mode = Modes.LLM
+        self.mode = default_mode
 
     def switchMode(self, mode: str) -> None:
         if mode == "llm":
@@ -44,7 +42,7 @@ class ModeController(Module):
         elif "switch rag" in text.lower():
             self.switchMode(Modes.RAG)
         elif "bye bye" in text.lower():
-            self.publish("exit", "")  # TODO handle (manager being a module)
+            self.publish("exit", "")  # TODO handle (manager being a module) usefull ?
         elif text.strip() == "":
             return
         else:
