@@ -3,7 +3,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Dict
-
+import sys
 from src.tools.logger import (
     LevelFilter,
     QueueListener,
@@ -85,6 +85,10 @@ class HuRI:
         self._start_log_channel()
         self._start_router()
         self._start_event_proxy()
+
+        if not sys.stdin.isatty():
+            threading.Event().wait()
+            return
 
         from src.core.shell import RobotShell
 

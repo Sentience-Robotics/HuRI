@@ -23,17 +23,17 @@ forwarder-proxy:
 logging: DEBUG
 
 modules:
-  INP:
-    name: inp
+  inp:
+    name: INP
     logging: INFO
-  OUT:
-    name: out
+  out:
+    name: OUT
     logging: INFO
-  MOD:
-    name: mod
+  mod:
+    name: MOD
     logging: INFO
-  RAG:
-    name: rag
+  rag:
+    name: RAG
     args:
       model: deepseek-v2:16b
     logging: INFO
