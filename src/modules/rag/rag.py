@@ -10,6 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_ollama.llms import OllamaLLM
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.documents import Document
 
 from src.core.module import Module
 
@@ -49,7 +50,9 @@ class Rag(Module):
         self.conversation_log = {"conversation": []}
 
     def ragFill(self, text: str) -> None:
-        self.documents += self.textSplitter.split_documents(text)
+        self.documents += self.textSplitter.split_documents(
+            [Document(page_content=text)]
+        )
         self.vectorstore.add_documents(self.documents)
 
     def ragLoad(self, folderPath: str, fileType: str) -> None:

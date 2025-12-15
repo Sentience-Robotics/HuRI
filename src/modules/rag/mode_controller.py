@@ -27,12 +27,13 @@ class ModeController(Module):
         self.mode = default_mode
 
     def switchMode(self, mode: str) -> None:
-        if mode == "llm":
-            self.mode = Modes.LLM
-        elif mode == "context":
-            self.mode = Modes.CONTEXT
-        elif mode == "rag":
-            self.mode = Modes.RAG
+        # if mode == "llm":
+        #     self.mode = Modes.LLM
+        # elif mode == "context":
+        #     self.mode = Modes.CONTEXT
+        # elif mode == "rag":
+        #     self.mode = Modes.RAG
+        self.mode = mode
 
     def processTextInput(self, text: str):
         if "switch llm" in text.lower():
