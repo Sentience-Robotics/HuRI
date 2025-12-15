@@ -1,0 +1,39 @@
+id: agent-io
+hostname: localhost
+
+huri:
+  hostname: localhost
+  router:
+    port: 3000
+  event-proxy:
+    xsub: 5555
+    xpub: 5556
+  log-puller:
+    port: 8008
+
+dealer: # todo
+  heartbeat:
+    interval_ms: 1000
+    timeout_ms: 5000
+
+forwarder-proxy:
+  down-xsub: 6665
+  up-xpub: 6666
+
+logging: DEBUG
+
+modules:
+  INP:
+    name: inp
+    logging: INFO
+  OUT:
+    name: out
+    logging: INFO
+  MOD:
+    name: mod
+    logging: INFO
+  RAG:
+    name: rag
+    args:
+      model: deepseek-v2:16b
+    logging: INFO
