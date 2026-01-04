@@ -24,9 +24,10 @@ class ModuleFactory:
         return cls._registry[name](**args)
 
 
-ModuleFactory.register("mic", RecordSpeech)
-ModuleFactory.register("stt", SpeechToText)
-ModuleFactory.register("inp", TextInput)
-ModuleFactory.register("out", TextOutput)
-ModuleFactory.register("rag", Rag)
-ModuleFactory.register("mod", ModeController)
+def build_module_factory() -> None:
+    ModuleFactory.register("mic", RecordSpeech)
+    ModuleFactory.register("stt", SpeechToText)
+    ModuleFactory.register("inp", TextInput)
+    ModuleFactory.register("out", TextOutput)
+    ModuleFactory.register("rag", Rag)
+    ModuleFactory.register("mod", ModeController)

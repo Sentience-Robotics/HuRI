@@ -4,7 +4,8 @@ import time
 
 import yaml
 
-from src.core.agent import Agent, AgentConfig, HuriConfig
+from src.core.agent import Agent, AgentConfig
+from src.modules.factory import build_module_factory
 
 
 def load_config(path: str) -> AgentConfig:
@@ -25,6 +26,8 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+
+    build_module_factory()
 
     agent = Agent(config)
     time.sleep(0.1)

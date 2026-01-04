@@ -4,13 +4,8 @@ import time
 
 import yaml
 
-from src.core.huri import (
-    EventProxyConfig,
-    HuRI,
-    HuriConfig,
-    LogPullerConfig,
-    RouterConfig,
-)
+from src.core.huri import HuRI, HuriConfig
+from src.modules.factory import build_module_factory
 
 
 def load_config(path: str) -> HuriConfig:
@@ -31,6 +26,8 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+
+    build_module_factory()
 
     huri = HuRI(config)
     time.sleep(0.1)
