@@ -8,14 +8,15 @@ import zmq
 
 from src.tools.logger import logging
 
-# from .zmq.event_proxy import "6665", XSUB_ENDPOINT
-
 
 class Module(ABC):
     def __init__(self):
         """Child Modules must call super.__init__() in their __init__() function."""
         self.ctx = None
         self.pub_socket = None
+        self.connect_hostname = None
+        self.xpub_port = None
+        self.xsub_port = None
         self.subs: Dict[str, zmq.Socket[bytes]] = {}
         self.callbacks = {}
         self._poller_running = False
@@ -26,11 +27,11 @@ class Module(ABC):
     def _initialize(self) -> None:
         """
         Called inside start_module() or manually before usage.
-        This function exist because ctx cannot be set in __init__, because of multi-processing.
+        This function exist because ctx cannot be set in __init__, because of multi-processing. maybe deprecated
         """
         self.ctx = zmq.Context()
         self.pub_socket = self.ctx.socket(zmq.PUB)
-        self.pub_socket.connect("tcp://localhost:6666")
+        self.pub_socket.connect(f"tcp://{self.connect_hostname}:{self.xpub_port}")
         self.poller = threading.Thread(target=self._poll_loop, daemon=True)
         self.set_subscriptions()
 
@@ -42,7 +43,7 @@ class Module(ABC):
     @final
     def subscribe(self, topic: str, callback: Callable) -> None:
         sub_socket = self.ctx.socket(zmq.SUB)
-        sub_socket.connect("tcp://localhost:6665")
+        sub_socket.connect(f"tcp://{self.connect_hostname}:{self.xsub_port}")
         sub_socket.setsockopt_string(zmq.SUBSCRIBE, topic)
         self.subs[topic] = sub_socket
         self.callbacks[topic] = callback
@@ -96,7 +97,16 @@ class Module(ABC):
                         self.callbacks[topic_str](data)
 
     @final
-    def start_module(self, stop_event: Event = None) -> None:
+    def start_module(
+        self,
+        connect_hostname: str,
+        xpub_port: int,
+        xsub_port: int,
+        stop_event: Event = None,
+    ) -> None:
+        self.connect_hostname = connect_hostname
+        self.xpub_port = xpub_port
+        self.xsub_port = xsub_port
         self._initialize()
         if self.subs != {}:
             self._start_polling()

@@ -11,16 +11,11 @@ huri:
   log-puller:
     port: 8008
 
-dealer: # todo
-  heartbeat:
-    interval_ms: 1000
-    timeout_ms: 5000
-
 forwarder-proxy:
   down-xsub: 6665
   up-xpub: 6666
 
-logging: DEBUG
+logging: INFO
 
 modules:
   inp:

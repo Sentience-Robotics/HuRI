@@ -89,6 +89,7 @@ class Agent:
 
     def __init__(self, config: AgentConfig) -> None:
         self.modules: Dict[str, ModuleConfig] = config.modules
+        self.config = config
 
         self.processes: Dict[str, mp.Process] = {}
         self.stop_events: Dict[str, Event] = {}
@@ -138,7 +139,11 @@ class Agent:
 
     @staticmethod
     def _start_module(
-        name: str, module_config: ModuleConfig, log_queue: mp.Queue, stop_event: Event
+        name: str,
+        module_config: ModuleConfig,
+        agent_config: AgentConfig,
+        log_queue: mp.Queue,
+        stop_event: Event,
     ) -> None:
         """Helper function to start module in child process."""
         logger = setup_logger(
@@ -153,7 +158,12 @@ class Agent:
 
         signal.signal(signal.SIGINT, handle_sigint)
 
-        module.start_module(stop_event=stop_event)
+        module.start_module(
+            agent_config.hostname,
+            agent_config.forwarder_proxy.up_xpub,
+            agent_config.forwarder_proxy.down_xsub,
+            stop_event=stop_event,
+        )
 
     def start_module(self, name) -> None:
         """Check if module is registered and not already running, and start a child process."""
@@ -172,7 +182,13 @@ class Agent:
         stop_event = mp.Event()
         p = mp.Process(
             target=self._start_module,
-            args=(name, module_config, self.log_pusher.log_queue, stop_event),
+            args=(
+                name,
+                module_config,
+                self.config,
+                self.log_pusher.log_queue,
+                stop_event,
+            ),
             daemon=True,
         )
         self.processes[name] = p
@@ -214,12 +230,6 @@ class Agent:
     def status(self) -> None:
         """Print status of all modules and router."""
         print("=== Module Status ===")
-        # if self.router_process:
-        #     router_state = "alive" if self.router_process.is_alive() else "stopped"
-        #     print(f"- Router: {router_state} (PID={self.router_process.pid})")
-        # else:
-        #     print("- Router: not started")
-
         for name in self.modules:
             process = self.processes.get(name)
             if process:
@@ -237,14 +247,6 @@ class Agent:
 
     def set_log_levels(self, level: int) -> None:
         self.log_pusher.level_filter.set_levels(level)
-
-    # def log_status(self) -> None:
-    #     """Print status of all modules and router."""
-    #     print("=== Log Status ===")
-    #     print(f"Root level: {logging.getLevelName(self.level_filter.root_level)}")
-    #     for name, lvl in self.level_filter.log_levels.items():
-    #         print(f"- {name}: {logging.getLevelName(lvl)}")
-    #     print("=====================")
 
     def _connect_to_huri(self) -> None:
         self.log_pusher.level_filter.add_level("Dealer")
@@ -267,10 +269,6 @@ class Agent:
 
     def run(self) -> None:
         """Start event router and modules"""  # TODO config (also logs levels)
-
-        # def handle_sigint(signum, frame):
-        #     self.logger.info(f"Ctrl+C detected, stopping...")
-        #     self.stop_all()
 
         try:
             self.log_pusher.start()
