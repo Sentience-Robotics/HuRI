@@ -1,26 +1,17 @@
 import multiprocessing as mp
 import signal
-import sys
 import threading
-import time
-from multiprocessing.synchronize import Event
-from typing import Dict, List, Any, Mapping
-from src.modules.factory import ModuleFactory
-import zmq
-
-from src.tools.logger import (
-    LevelFilter,
-    QueueListener,
-    logging,
-    setup_log_listener,
-    setup_logger,
-)
 from dataclasses import dataclass
-from .module import Module
+from multiprocessing.synchronize import Event
+from typing import Any, Dict, Mapping
+
+from src.modules.factory import ModuleFactory
+from src.tools.logger import logging, setup_logger
+
+from .huri import HuriConfig
 from .zmq.control_channel import Command, Dealer
 from .zmq.event_proxy import EventProxy
 from .zmq.log_channel import LogPusher
-from .huri import HuriConfig
 
 
 @dataclass
@@ -154,7 +145,7 @@ class Agent:
         module.set_custom_logger(logger)
 
         def handle_sigint(signum, frame):
-            logger.info(f"Ctrl+C ignored in child module")
+            logger.info("Ctrl+C ignored in child module")
 
         signal.signal(signal.SIGINT, handle_sigint)
 

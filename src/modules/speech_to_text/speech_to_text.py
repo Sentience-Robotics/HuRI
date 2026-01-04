@@ -1,15 +1,10 @@
-import io
 import queue
 import threading
-import time
-from typing import Callable, List, Optional
 
 import numpy as np
-import sounddevice as sd
-import soundfile as sf
 import whisper
 
-from src.core.module import Event, Module
+from src.core.module import Module
 
 
 class SpeechToText(Module):

@@ -1,5 +1,5 @@
-import torch
 import numpy as np
+import torch
 from transformers import AutoModelForAudioClassification, Wav2Vec2FeatureExtractor
 
 MODEL_NAME = "superb/hubert-large-superb-er"

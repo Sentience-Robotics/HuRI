@@ -1,16 +1,9 @@
-import multiprocessing as mp
+import sys
 import threading
-import time
 from dataclasses import dataclass
 from typing import Dict
-import sys
-from src.tools.logger import (
-    LevelFilter,
-    QueueListener,
-    logging,
-    setup_log_listener,
-    setup_logger,
-)
+
+from src.tools.logger import setup_logger
 
 from .zmq.control_channel import Router
 from .zmq.event_proxy import EventProxy

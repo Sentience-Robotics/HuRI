@@ -146,7 +146,7 @@ class Module(ABC):
         except Exception as e:
             self.logger.error(f"Error terminating ZMQ context: {e}")
 
-        self.logger.info(f"Module stopped gracefully.")
+        self.logger.info("Module stopped gracefully.")
 
     def run_module(self, stop_event: Event = None) -> None:
         """Child modules override this instead of run(). Default: idle wait."""
