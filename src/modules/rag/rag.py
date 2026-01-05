@@ -62,7 +62,8 @@ class Rag(Module):
                 self.documents += self.textSplitter.split_documents(fileLoader.load())
         self.vectorstore.add_documents(self.documents)
 
-    def ragQuestion(self, question: str) -> None:
+    def ragQuestion(self, text: str) -> None:
+        question = text
         self.logger.debug("question:", question)
         history = "\n".join(
             [
@@ -79,7 +80,7 @@ class Rag(Module):
         self.conversation_log["conversation"].append(
             {"question": question.split(helpingContext)[1:], "answer": answer}
         )
-        self.publish("llm.response", answer)
+        self.publish("llm.response", text=answer)
 
     def saveConversation(self, filename: str = "conversation_log.json"):
         with open(filename, "w") as f:

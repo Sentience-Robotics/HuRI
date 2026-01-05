@@ -7,4 +7,4 @@ class TextOutput(Module):
 
     def print_response(self, text: str) -> None:
         print(f"\r<< {text}")
-        self.publish("std.out", "")
+        self.publish("std.out")

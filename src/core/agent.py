@@ -274,4 +274,4 @@ class Agent:
 
         while True:
             data = input()
-            self.down_proxy.publish("std.in", data)
+            self.down_proxy.publish("std.in", data=data)

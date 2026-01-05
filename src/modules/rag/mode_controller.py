@@ -25,12 +25,12 @@ class ModeController(Module):
         elif "switch rag" in text.lower():
             self.switchMode(Modes.RAG)
         elif "bye bye" in text.lower():
-            self.publish("exit", "")  # TODO handle (manager being a module) usefull ?
+            self.publish("exit")  # TODO handle (manager being a module) usefull ?
         elif text.strip() == "":
             return
         else:
             topic = f"{str(self.mode.name).lower()}.in"
-            self.publish(topic, text)
+            self.publish(topic, text=text)
 
     def set_subscriptions(self):
         self.subscribe("text.in", self.processTextInput)

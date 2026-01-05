@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Mapping, Any
 
 import zmq
 
 from src.tools.logger import logging, setup_logger
+from src.core.events import ModuleEvent
 
 
 @dataclass
@@ -53,6 +54,11 @@ class EventProxy:
         self.xsub.close(linger=0)
         self.xpub.close(linger=0)
 
-    def publish(self, topic: str, msg: str) -> None:
-        self.xpub.send_multipart([topic.encode(), "str".encode(), msg.encode()])
+    def publish(
+        self,
+        topic: str,
+        **kwargs: Mapping[str, Any],
+    ) -> None:
+        event = ModuleEvent(topic=topic, payload=kwargs)
+        self.xpub.send_multipart(event.serialize())
         self.logger.info(f"Publish: {topic} str")

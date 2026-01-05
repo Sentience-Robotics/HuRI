@@ -77,14 +77,14 @@ class RecordSpeech(Module):
                     if buffer == []:
                         break
                     speech = np.concatenate(buffer, axis=0)
-                    self.publish("speech.in", speech.tobytes(), "bytes")
+                    self.publish("speech.in", buffer=speech.tobytes())
                     break
             else:
                 silence_start = None
 
     def set_subscriptions(self) -> None:
-        self.subscribe("speech.in.pause", self.pause())
-        self.subscribe("speech.in.resume", self.pause(False))
+        self.subscribe("speech.in.pause", lambda: self.pause())
+        self.subscribe("speech.in.resume", lambda: self.pause(False))
 
     def run_module(self, stop_event: Event = None) -> None:
         if not self.THRESHOLD:

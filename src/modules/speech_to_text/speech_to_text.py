@@ -44,7 +44,7 @@ class SpeechToText(Module):
         if not result["text"] or result["text"] == "":
             return
 
-        self.publish("text.in", result["text"])
+        self.publish("text.in", text=result["text"])
 
     def set_subscriptions(self) -> None:
         self.subscribe("speech.in", self.process_audio)
