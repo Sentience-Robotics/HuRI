@@ -1,12 +1,12 @@
-import json
 import threading
 from abc import ABC, abstractmethod
 from multiprocessing.synchronize import Event
-from typing import Callable, Dict, final
+from typing import Callable, Dict, final, Any, Mapping
 
 import zmq
 
 from src.tools.logger import logging
+from src.core.events import ModuleEvent
 
 
 class Module(ABC):
@@ -51,19 +51,21 @@ class Module(ABC):
 
     @final
     def publish(
-        self, topic: str, msg: object, content_type: str = "str"
-    ) -> None:  # TODO content type enum
-        if content_type == "json":
-            payload = json.dumps(msg).encode()
-        elif content_type == "bytes":
-            payload = msg
-        elif content_type == "str":
-            payload = msg.encode()
-        else:
-            raise ValueError(f"Unsupported content_type: {content_type}")
+        self,
+        topic: str,
+        **kwargs: Mapping[str, Any],
+    ) -> None:
+        """
+        Will publish a ModuleEvent to other modules.
 
-        self.pub_socket.send_multipart([topic.encode(), content_type.encode(), payload])
-        self.logger.info(f"Publish: {topic} {content_type}")
+        :param topic: the topic of the event
+        :type topic: str
+        :param kwargs: kwargs must be named as the receiving module's callbacks
+        :type kwargs: Mapping[str, Any]
+        """
+        event = ModuleEvent(topic=topic, payload=kwargs)
+        self.logger.info(f"Publish: {topic} {kwargs.keys()}")
+        self.pub_socket.send_multipart(event.serialize())
 
     @final
     def _start_polling(self) -> None:
@@ -80,21 +82,11 @@ class Module(ABC):
             events = dict(poller.poll(100))
             for _, sub in self.subs.items():
                 if sub in events:
-                    topic, content_type, payload = sub.recv_multipart()
-                    topic_str = topic.decode()
-                    content_type_str = content_type.decode()
-                    self.logger.info(f"Receive: {topic_str} {content_type_str}")
-                    if content_type_str == "json":
-                        kwargs = json.loads(payload.decode())
-                        self.callbacks[topic_str](
-                            **kwargs
-                        )  # TODO better and cleaner way ?
-                    elif content_type_str == "bytes":
-                        data = payload
-                        self.callbacks[topic_str](data)
-                    elif content_type_str == "str":
-                        data = payload.decode()
-                        self.callbacks[topic_str](data)
+                    data = sub.recv_multipart()
+                    event = ModuleEvent.deserialize(data)
+
+                    self.logger.info(f"Receive: {event.topic} {event.payload.keys()}")
+                    self.callbacks[event.topic](**event.payload)
 
     @final
     def start_module(
