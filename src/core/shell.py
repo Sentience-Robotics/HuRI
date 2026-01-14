@@ -1,7 +1,7 @@
 import cmd
 
 from src.core.huri import HuRI
-from src.core.zmq.control_channel import Command
+from src.core.events import CommandEvent, Command
 
 
 class RobotShell(cmd.Cmd):
@@ -14,18 +14,18 @@ class RobotShell(cmd.Cmd):
 
     def do_status(self, arg) -> None:
         "Display modules and router status."
-        self.huri.router.send_commands(Command("STATUS", []))
+        self.huri.router.send_commands(Command.STATUS)
 
     def do_start(self, arg) -> None:
         "Start a module."
-        self.huri.router.send_commands(Command("START", [arg.strip()]))
+        self.huri.router.send_commands(Command.START, arg)
 
     def do_stop(self, arg) -> None:
         "Stop a module."
-        self.huri.router.send_commands(Command("STOP", [arg.strip()]))
+        self.huri.router.send_commands(Command.STOP, arg)
 
     def do_exit(self, arg) -> None:
         "Exit HuRi."
-        self.huri.router.send_commands(Command("EXIT", []))
+        self.huri.router.send_commands(Command.EXIT)
         print("Bye !")
         return True

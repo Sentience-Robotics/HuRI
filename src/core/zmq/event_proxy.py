@@ -1,10 +1,10 @@
 from dataclasses import dataclass
-from typing import Optional, Mapping, Any
+from typing import Any, Mapping, Optional
 
 import zmq
 
-from src.tools.logger import logging, setup_logger
 from src.core.events import ModuleEvent
+from src.tools.logger import logging, setup_logger
 
 
 @dataclass
@@ -24,8 +24,8 @@ class EventProxy:
     ):
 
         self.ctx = zmq.Context.instance()
-        self.xpub = self.ctx.socket(zmq.XPUB)
-        self.xsub = self.ctx.socket(zmq.XSUB)
+        self.xpub: zmq.Socket[bytes] = self.ctx.socket(zmq.XPUB)
+        self.xsub: zmq.Socket[bytes] = self.ctx.socket(zmq.XSUB)
 
         self.hostname = hostname
         self.connect_hostname = connect_hostname

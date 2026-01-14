@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from multiprocessing.synchronize import Event
 from typing import Any, Dict, Mapping
 
+from src.core.events import Command, CommandEvent
+
 from src.modules.factory import ModuleFactory
 from src.tools.logger import logging, setup_logger
 
 from .huri import HuriConfig
-from .zmq.control_channel import Command, Dealer
+from .zmq.control_channel import Dealer
 from .zmq.event_proxy import EventProxy
 from .zmq.log_channel import LogPusher
 
@@ -117,14 +119,24 @@ class Agent:
             f"Agent {self.dealer.identity}", log_queue=self.log_pusher.log_queue
         )
 
-    def _command_handler(self, command: Command) -> bool:
+    def _command_handler(self, command: CommandEvent) -> bool:
         match command.cmd:
-            case "START":
-                return self.start_module(*command.args)
-            case "STOP":
-                return self.stop_module(*command.args)
-            case "STATUS":
+            case Command.START:
+                for name in self.modules:
+                    self.start_module(name)
+                pass
+            case Command.STOP:
+                for name in list(self.processes.keys()):
+                    self.stop_module(name)
+            case Command.START_MODULE:
+                return self.start_module(**command.payload)
+            case Command.STOP_MODULE:
+                return self.stop_module(**command.payload)
+            case Command.STATUS:
                 return self.status()
+            case Command.EXIT:
+                self.exit()
+                pass
             case _:
                 return False  # todo log
 
@@ -202,7 +214,7 @@ class Agent:
             del self.stop_events[name]
             self.log_pusher.level_filter.del_level(name)
 
-    def stop_all(self) -> None:
+    def exit(self) -> None:
         for name in list(self.processes.keys()):
             self.stop_module(name)
 
@@ -268,9 +280,6 @@ class Agent:
         except Exception as e:
             self.logger.error(e)
             return
-
-        for name in self.modules:
-            self.start_module(name)
 
         while True:
             data = input()

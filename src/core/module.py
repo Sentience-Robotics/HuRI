@@ -1,12 +1,12 @@
 import threading
 from abc import ABC, abstractmethod
 from multiprocessing.synchronize import Event
-from typing import Callable, Dict, final, Any, Mapping
+from typing import Any, Callable, Dict, Mapping, final
 
 import zmq
 
-from src.tools.logger import logging
 from src.core.events import ModuleEvent
+from src.tools.logger import logging
 
 
 class Module(ABC):
