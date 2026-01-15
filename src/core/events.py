@@ -28,35 +28,37 @@ class ModuleEvent:
         return cls(topic=topic.decode(), payload=json.loads(payload.decode()))
 
 
-class Command(Enum):
-    REGISTER = "REGISTER"
-    AUTH_OK = "AUTH_OK"
-    START = "START"
-    STOP = "STOP"
-    START_MODULE = "START_MODULE"
-    STOP_MODULE = "STOP_MODULE"
-    STATUS = "STATUS"
-    EXIT = "EXIT"
+class Control(Enum):
+    # Agent -> HuRI
+    REGISTER = "REGISTER"  # send auth + agent config
+    HEARTBEAT = "HEARTBEAT"  # send agent heartbeat + modified config
+    # HuRI -> Agents
+    AUTH_OK = "AUTH_OK"  # send huri config (after)
+    START = "START"  # start all modules
+    STOP = "STOP"  # stop all modules
+    START_MODULE = "START_MODULE"  # start specific modules
+    STOP_MODULE = "STOP_MODULE"  # stop specific modules
+    EXIT = "EXIT"  # exit agent
 
 
 @dataclass
-class CommandEvent:
-    cmd: Command
+class ControlEvent:
+    ctrl: Control
     payload: Mapping[str, Any]
 
     @classmethod
     def from_dict(cls, raw: Dict):
-        return cls(cmd=Command(raw["topic"]), payload=raw["payload"])
+        return cls(ctrl=Control(raw["ctrl"]), payload=raw["payload"])
 
     def serialize(self) -> Sequence:
-        print(self.cmd.value)
+        print(self.ctrl.value)
 
         return [
-            self.cmd.value.encode(),
+            self.ctrl.value.encode(),
             json.dumps(self.payload).encode(),
         ]
 
     @classmethod
     def deserialize(cls, raw: List[bytes]):
-        cmd, payload = raw
-        return cls(cmd=Command(cmd.decode()), payload=json.loads(payload.decode()))
+        ctrl, payload = raw
+        return cls(ctrl=Control(ctrl.decode()), payload=json.loads(payload.decode()))
