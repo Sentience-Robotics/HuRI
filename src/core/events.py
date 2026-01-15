@@ -30,6 +30,7 @@ class ModuleEvent:
 
 class Command(Enum):
     REGISTER = "REGISTER"
+    AUTH_OK = "AUTH_OK"
     START = "START"
     STOP = "STOP"
     START_MODULE = "START_MODULE"
@@ -57,6 +58,5 @@ class CommandEvent:
 
     @classmethod
     def deserialize(cls, raw: List[bytes]):
-        print(raw)
         cmd, payload = raw
         return cls(cmd=Command(cmd.decode()), payload=json.loads(payload.decode()))

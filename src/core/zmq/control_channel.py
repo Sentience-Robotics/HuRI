@@ -1,39 +1,13 @@
 import json
+import threading
 import uuid
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, Dict, List, Optional, Mapping
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import zmq
 
 from src.core.events import Command, CommandEvent
 from src.tools.logger import logging, setup_logger
-
-# @dataclass
-# class Command:
-#     cmd: str  # "STOP", "START", "STATUS", ...
-#     args: List[Any]  # JSON-serializable arguments
-
-#     def to_bytes(self) -> bytes:
-#         return json.dumps(asdict(self)).encode("utf-8")
-
-#     @staticmethod
-#     def from_bytes(data: bytes) -> "Command":
-#         obj = json.loads(data.decode("utf-8"))
-#         return Command(**obj)
-
-
-# @dataclass
-# class Result:
-#     success: bool
-#     result: List[Any]
-
-#     def to_bytes(self) -> bytes:
-#         return json.dumps(asdict(self)).encode("utf-8")
-
-#     @staticmethod
-#     def from_bytes(data: bytes) -> "Command":
-#         obj = json.loads(data.decode("utf-8"))
-#         return Result(**obj)
 
 
 class Router:
@@ -48,60 +22,104 @@ class Router:
         self.hostname = hostname
         self.port = port
 
-        self.logger = logger or logging.getLogger(__name__)
+        self._stop_event = None
+        self._poll_thread = None
+        self._started = False
 
         self.dealers: Dict[bytes, bool] = {}
 
-    def register_dealer(self, auth: str, name: str, config: Dict[str, Any]) -> None:
+        self.logger = logger or logging.getLogger(__name__)
+
+    def _register_dealer(
+        self, identity: bytes, auth: str, name: str, config: Dict[str, Any]
+    ) -> None:
         if auth != "oui":
             return
 
-        self.dealers[name] = config
-        self.logger.info(f"Dealer registered: {name}")
+        self.dealers[identity] = config
+        self.logger.info(f"Dealer registered: {identity}")
 
-    def start(self):
-        self.router.bind(f"tcp://{self.hostname}:{self.port}")
-        self.logger.info("Router started")
+        self.send_command(identity, Command.AUTH_OK)
+        self.send_command(identity, Command.START)
 
-        try:
-            while True:
+    def _poll(self) -> None:  # todo poller
+        """
+        Start a blocking poller loop.
+        call self.stop() to stop.
+        """
+
+        while not self._stop_event.is_set():
+            try:
                 identity, *data = self.router.recv_multipart()
-                self.logger.warning(data)
                 command = CommandEvent.deserialize(data)
 
                 if command.cmd == Command.REGISTER:
-                    self.register_dealer(**command.payload)
+                    self._register_dealer(identity, **command.payload)
+                else:
+                    raise Exception(f"Dealer {identity} sent {command.cmd}")
+            except zmq.Again:
+                continue
+            except Exception as e:
+                self.logger.warning(e, exc_info=True)
 
-        except Exception as e:
-            self.logger.exception(e)
-            pass
-        finally:
-            self.router.close()
+    def start(self) -> None:
+        """
+        Bind to endpoint.
+        Launch a poll loop thread.
+        """
+        if self._started is True:
+            raise Exception("already started")
+
+        self.router.bind(f"tcp://{self.hostname}:{self.port}")
+        self.router.setsockopt(zmq.RCVTIMEO, 1000)
+        self.logger.info("started")
+
+        self._stop_event = threading.Event()
+        self._poll_thread = threading.Thread(target=self._poll)
+        self._poll_thread.start()
+
+        self._started = True
 
     def stop(self) -> None:
-        self.router.close()
+        if self._started is False:
+            raise Exception("not started")
+
+        self._stop_event.set()
+        self._poll_thread.join(2.0)
+
+        self.router.close(linger=0)
+        self._stop_event = None
+        self._poll_thread = None
+
+        self._started = False
 
     def send_command(
-        self, dealer_name: str, command: Command, **kwargs: Mapping[str, Any]
+        self, dealer_identity: str, command: Command, **kwargs: Mapping[str, Any]
     ) -> None:
-        if dealer_name not in self.dealers:
-            raise ValueError("Dealer not registered")
+        if self._started is False:
+            raise Exception("not started")
+
+        if dealer_identity not in self.dealers:
+            raise ValueError(f"Dealer {dealer_identity} not registered")
 
         event = CommandEvent(cmd=command, payload=kwargs)
-        self.router.send_multipart(event.serialize())
+        self.logger.info(f"Sending Command {command} to: {dealer_identity}")
+        self.router.send_multipart([dealer_identity] + event.serialize())
 
     def send_commands(self, command: Command, **kwargs: Mapping[str, Any]) -> None:
-        for dealer_name, _ in self.dealers.items():
-            self.logger.info(f"Sending Command to: {dealer_name}")
-            self.send_command(dealer_name, command, **kwargs)
+        if self._started is False:
+            raise Exception("not started")
+
+        for dealer_identity, _ in self.dealers.items():
+            self.send_command(dealer_identity, command, **kwargs)
 
 
-class Dealer:
+class Dealer:  # todo heartbeat
     def __init__(
         self,
         hostname: str,
         port: int,
-        executor: Callable[[Command], bool],
+        handler: Callable[[Command], bool],
         logger: Optional[logging.Logger] = None,
         identity: Optional[str] = None,
     ):
@@ -111,52 +129,74 @@ class Dealer:
         self.hostname = hostname
         self.port = port
 
-        self.executor = executor
+        self.handler = handler
         self.identity = identity or str(uuid.uuid4())  # TODO agent name
+
+        self._stop_event = None
+        self._poll_thread = None
+        self._started = False
 
         self.logger = logger or logging.getLogger(f"Dealer {self.identity}")
 
-    def start(self):
-        self.dealer.connect(f"tcp://{self.hostname}:{self.port}")
-        self.dealer.setsockopt(zmq.IDENTITY, self.identity.encode())
-        self.logger.info(f"Dealer started: {self.identity}")
+    def _poll(self) -> None:
+        """
+        Start a blocking poller loop.
+        call self.stop() to stop.
+        """
 
-        try:
-            register = CommandEvent(
-                cmd=Command.REGISTER,
-                payload={
-                    "auth": "oui",
-                    "name": self.identity,
-                    "config": {"none": None},
-                },
-            )
-            self.dealer.send_multipart(register.serialize())
-
-            while True:
-                # self.dealer.
-                self.logger.info("received nothing still")
+        while not self._stop_event.is_set():
+            try:
                 data = self.dealer.recv_multipart()
-                self.logger.info("received")
                 command = CommandEvent.deserialize(data)
 
-                self.logger.info("received command")
-                result = self.execute(command)
+                self.logger.info(f"Received Command {command.cmd}")
+                result = self.handler(command)
 
                 # self.dealer.send_multipart([b"RESULT", result])
-        except Exception as e:
-            self.logger.exception(e)
-        finally:
-            self.dealer.close()
+            except zmq.Again:
+                continue
+            except Exception as e:
+                self.logger.exception(e)
 
-    def execute(self, command: CommandEvent) -> bytes:
+    def start(self) -> None:
         """
-        Execute command sent by Router
+        Connect to endpoint.
+        Launch a poll loop thread.
+        Send Register command (wip).
         """
-        self.executor(command)
+        if self._started is True:
+            raise Exception("already started")
 
-        # Example execution
-        result = f"Executed: {command.cmd}"
-        return result.encode()
+        self.dealer.connect(f"tcp://{self.hostname}:{self.port}")
+        self.dealer.setsockopt(zmq.IDENTITY, b"name")
+        self.dealer.setsockopt(zmq.RCVTIMEO, 1000)
+        self.logger.info(f"Dealer started: {self.identity}")
+
+        self._stop_event = threading.Event()
+        self._poll_thread = threading.Thread(target=self._poll)
+        self._poll_thread.start()
+
+        register = CommandEvent(
+            cmd=Command.REGISTER,
+            payload={
+                "auth": "oui",
+                "name": self.identity,
+                "config": {"none": None},
+            },
+        )
+        self.dealer.send_multipart(register.serialize())
+
+        self._started = True
 
     def stop(self) -> None:
+        if self._started is False:
+            raise Exception("not started")
+
+        self._stop_event.set()
+        self._poll_thread.join(2.0)
+
         self.dealer.close(linger=0)
+        self._stop_event = None
+        self._poll_thread = None
+
+        self._started = False
