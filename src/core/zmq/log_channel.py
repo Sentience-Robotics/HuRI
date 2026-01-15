@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -66,24 +67,54 @@ class LogPuller:
         logger: Optional[logging.Logger] = setup_logger("LogPuller"),
     ) -> None:
         self.ctx = zmq.Context.instance()
-        self.pull = self.ctx.socket(zmq.PULL)
+        self.pull: zmq.Socket[bytes] = self.ctx.socket(zmq.PULL)
 
         self.hostname = hostname
         self.port = port
 
+        self._stop_event = None
+        self._poll_thread = None
+        self._started = False
+
         self.logger = logger or logging.getLogger(__name__)
 
+    def _poll(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                payload = self.pull.recv()
+
+                self.logger.handle(dict_to_record(json.loads(payload.decode())))
+            except zmq.Again:
+                continue
+            except Exception as e:
+                self.logger.exception(e)
+
     def start(self) -> None:
+        if self._started is True:
+            raise Exception("already started")
+
         self.pull.bind(f"tcp://{self.hostname}:{self.port}")
-
+        self.pull.setsockopt(zmq.RCVTIMEO, 1000)
         self.logger.info("started")
-        while True:
-            payload = self.pull.recv()
 
-            self.logger.handle(dict_to_record(json.loads(payload.decode())))
+        self._stop_event = threading.Event()
+        self._poll_thread = threading.Thread(target=self._poll)
+        self._poll_thread.start()
+
+        self._started = True
 
     def stop(self) -> None:
-        self.pull.close()
+        if self._started is False:
+            raise Exception("not started")
+
+        self._stop_event.set()
+        self._poll_thread.join(2.0)
+
+        self.pull.close(linger=0)
+        self._stop_event = None
+        self._poll_thread = None
+
+        self._started = False
 
 
 class LogPusher:
@@ -95,7 +126,7 @@ class LogPusher:
         ):
             super().__init__()
             self.ctx = zmq.Context.instance()
-            self.socket = self.ctx.socket(zmq.PUSH)
+            self.socket: zmq.Socket[bytes] = self.ctx.socket(zmq.PUSH)
 
             self.hostname = hostname
             self.port = port
@@ -135,7 +166,7 @@ class LogPusher:
         self.log_handler.start()
         self.log_listener.start()
 
-    def stop(self):
+    def stop(self):  # todo _started
         self.logger.info("stopping")
         time.sleep(0.2)
         self.log_listener.stop()

@@ -4,7 +4,8 @@ import threading
 from dataclasses import dataclass
 from multiprocessing.synchronize import Event
 from typing import Any, Dict, Mapping
-
+import sys
+import os
 from src.core.events import Command, CommandEvent
 
 from src.modules.factory import ModuleFactory
@@ -87,7 +88,7 @@ class Agent:
         self.processes: Dict[str, mp.Process] = {}
         self.stop_events: Dict[str, Event] = {}
 
-        self.threads: Dict[str, threading.Thread] = {}
+        self.stop_event: threading.Event = threading.Event()
 
         self.log_pusher = LogPusher(
             hostname=config.huri.hostname, port=config.huri.log_puller.port
@@ -96,9 +97,10 @@ class Agent:
         self.dealer = Dealer(
             hostname=config.huri.hostname,
             port=config.huri.router.port,
-            executor=self._command_handler,
+            handler=self._command_handler,
             logger=setup_logger("Dealer", log_queue=self.log_pusher.log_queue),
         )
+        self.auth_ok = threading.Event()
 
         self.up_proxy = EventProxy(
             hostname=config.hostname,
@@ -119,15 +121,19 @@ class Agent:
             f"Agent {self.dealer.identity}", log_queue=self.log_pusher.log_queue
         )
 
-    def _command_handler(self, command: CommandEvent) -> bool:
+    def _command_handler(self, command: CommandEvent) -> bool:  # todo data race ?
         match command.cmd:
+            case Command.AUTH_OK:
+                self.auth_ok.set()
+                return True
             case Command.START:
-                for name in self.modules:
+                for name in list(self.modules.keys()):
                     self.start_module(name)
-                pass
+                return True
             case Command.STOP:
                 for name in list(self.processes.keys()):
                     self.stop_module(name)
+                return True
             case Command.START_MODULE:
                 return self.start_module(**command.payload)
             case Command.STOP_MODULE:
@@ -135,8 +141,10 @@ class Agent:
             case Command.STATUS:
                 return self.status()
             case Command.EXIT:
-                self.exit()
-                pass
+                "Stop run loop"
+                self.stop_event.set()
+                os.close(sys.stdin.fileno())
+                return True
             case _:
                 return False  # todo log
 
@@ -214,18 +222,17 @@ class Agent:
             del self.stop_events[name]
             self.log_pusher.level_filter.del_level(name)
 
-    def exit(self) -> None:
+    def stop(self) -> None:
         for name in list(self.processes.keys()):
             self.stop_module(name)
 
         self.dealer.stop()
         self.up_proxy.stop()
         self.down_proxy.stop()
-        for name, thread in self.threads.items():
-            self.logger.info(f"Stopping {name} thread...")
-            thread.join(timeout=5)
-            self.logger.info(f"{name} thread stopped")
-            self.log_pusher.level_filter.del_level(name)
+
+        self.log_pusher.level_filter.del_level("Dealer")
+        self.log_pusher.level_filter.del_level("UpProxy")
+        self.log_pusher.level_filter.del_level("DownProxy")
 
         self.log_pusher.stop()
         print("Fully stopped")
@@ -251,36 +258,46 @@ class Agent:
     def set_log_levels(self, level: int) -> None:
         self.log_pusher.level_filter.set_levels(level)
 
-    def _connect_to_huri(self) -> None:
-        self.log_pusher.level_filter.add_level("Dealer")
-        self.threads["Dealer"] = threading.Thread(target=self.dealer.start)
-        self.threads["Dealer"].start()
-
     def _start_event_proxies(self) -> None:
         """Used to handle inter-module communication, though events"""
         self.log_pusher.level_filter.add_level("UpProxy")
         self.log_pusher.level_filter.add_level("DownProxy")
-        self.threads["UpProxy"] = threading.Thread(
-            target=self.up_proxy.start, args=[True, False]
-        )
-        self.threads["DownProxy"] = threading.Thread(
-            target=self.down_proxy.start, args=[False, True]
-        )
 
-        self.threads["UpProxy"].start()
-        self.threads["DownProxy"].start()
+        self.up_proxy.start(True, False)
+        self.down_proxy.start(False, True)
 
     def run(self) -> None:
-        """Start event router and modules"""  # TODO config (also logs levels)
+        """
+        Start Dealer and check auth.
+        Then start EventProxies and LogPusher.
+        Then loop over input() to send input as Event.
+        Then, when exit is requested, call stop()
+        """  # TODO config (also logs levels)
 
         try:
+            self.log_pusher.level_filter.add_level("Dealer")
+            self.dealer.start()
+
+            if self.auth_ok.wait(5.0) is False:
+                raise Exception("not authentificated")
+
             self.log_pusher.start()
-            self._connect_to_huri()
             self._start_event_proxies()
         except Exception as e:
             self.logger.error(e)
             return
 
-        while True:
-            data = input()
-            self.down_proxy.publish("std.in", data=data)
+        while not self.stop_event.is_set():
+            try:
+                data = ""
+                data = input()
+            except EOFError:
+                self.logger.info("pressed EOF")
+                print("^D")
+
+            if data == "":
+                self.down_proxy.publish("std.out")
+            else:
+                self.down_proxy.publish("std.in", data=data)
+
+        self.stop()

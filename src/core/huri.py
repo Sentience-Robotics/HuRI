@@ -1,7 +1,7 @@
 import sys
 import threading
 from dataclasses import dataclass
-from typing import Dict
+from time import sleep
 
 from src.tools.logger import setup_logger
 
@@ -53,45 +53,38 @@ class HuRI:
         )
         self.log_channel = LogPuller(config.hostname, config.log_puller.port)
 
-        self.threads: Dict[str, threading.Thread] = {}
+        self.stop_event = threading.Event()
 
         self.logger = setup_logger("HuRI")
 
-    def _start_router(self) -> None:
-        """Used to handle Agent registration and control"""
-        self.threads["Router"] = threading.Thread(target=self.router.start)
-        self.threads["Router"].start()
-
-    def _start_event_proxy(self) -> None:
-        """Used to handle inter-module communication, though events"""
-        self.threads["EventProxy"] = threading.Thread(
-            target=self.event_proxy.start, args=[False, False]
-        )
-        self.threads["EventProxy"].start()
-
-    def _start_log_channel(self) -> None:
-        """Used to handle Agent registration and control"""
-        self.threads["LogChannel"] = threading.Thread(target=self.log_channel.start)
-        self.threads["LogChannel"].start()
-
     def run(self) -> None:
-        self._start_log_channel()
-        self._start_router()
-        self._start_event_proxy()
+        """
+        Start LogPuller.
+        Start Router.
+        Start EventProxy.
+        Then loop over RobotShell.cmdloop() to send input as commandst.
+        Then, when exit is requested, call stop()
+        """
+
+        "Used to handle log filtering and displaying"
+        self.log_channel.start()
+        "Used to handle Agent registration and control"
+        self.router.start()
+        "Used to handle inter-module communication, though events"
+        self.event_proxy.start(False, False)
 
         if not sys.stdin.isatty():
-            threading.Event().wait()
+            self.stop_event.wait()
             return
 
         from src.core.shell import RobotShell
 
         RobotShell(self).cmdloop()
 
+        self.stop()
+
     def stop(self) -> None:
         self.router.stop()
         self.event_proxy.stop()
         self.log_channel.stop()
-        for name, thread in self.threads.items():
-            self.logger.info(f"Stopping {name} thread...")
-            thread.join(timeout=5)
-            self.logger.info(f"{name} thread stopped")
+        print("Fully stopped")

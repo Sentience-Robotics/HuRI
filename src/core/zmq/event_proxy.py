@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
@@ -32,9 +33,18 @@ class EventProxy:
         self.xpub_port = xpub_port
         self.xsub_port = xsub_port
 
+        self._started: bool = False
+
         self.logger = logger or logging.getLogger(__name__)
 
     def start(self, xpub_connect: bool, xsub_connect: bool):
+        """
+        Connect to endpoint.
+        Launch a proxy thread.
+        """
+        if self._started is True:
+            raise Exception("already started")
+
         if xpub_connect:
             self.xpub.connect(f"tcp://{self.connect_hostname}:{self.xpub_port}")
         else:
@@ -44,21 +54,39 @@ class EventProxy:
         else:
             self.xsub.bind(f"tcp://{self.hostname}:{self.xsub_port}")
 
+        self.logger.info("Correctly initialized, starting proxy")
+
+        self._proxy_thread = threading.Thread(target=self._proxy)
+        self._proxy_thread.start()
+
+        self._started = True
+
+    def _proxy(self) -> None:
         try:
-            self.logger.info("Correctly initialized, starting proxy")
-            zmq.proxy(self.xsub, self.xpub)
+            zmq.proxy(self.xsub, self.xpub)  # todo capture to stop
         except Exception as e:
             self.logger.error(e)
 
     def stop(self) -> None:
-        self.xsub.close(linger=0)
+        if self._started is False:
+            raise Exception("not started")
+
+        self.xsub.close(linger=0)  # todo capture
         self.xpub.close(linger=0)
+
+        self._proxy_thread.join(2.0)
+        self._proxy_thread = None
+
+        self._started = False
 
     def publish(
         self,
         topic: str,
         **kwargs: Mapping[str, Any],
     ) -> None:
+        if self._started is False:
+            raise Exception("not started")
+
         event = ModuleEvent(topic=topic, payload=kwargs)
         self.xpub.send_multipart(event.serialize())
         self.logger.info(f"Publish: {topic} str")
