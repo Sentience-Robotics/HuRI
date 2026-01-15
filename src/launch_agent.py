@@ -34,9 +34,10 @@ def main() -> None:
     try:
         agent.run()
     except KeyboardInterrupt:
-        agent.exit()
+        agent.stop()
     except Exception as e:
         logging.getLogger(__name__).error(e)
+        agent.stop()
 
 
 if __name__ == "__main__":

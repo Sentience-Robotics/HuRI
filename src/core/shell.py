@@ -1,7 +1,7 @@
 import cmd
 
+from src.core.events import Command, CommandEvent
 from src.core.huri import HuRI
-from src.core.events import CommandEvent, Command
 
 
 class RobotShell(cmd.Cmd):
@@ -23,6 +23,7 @@ class RobotShell(cmd.Cmd):
     def do_stop(self, arg) -> None:
         "Stop a module."
         self.huri.router.send_commands(Command.STOP, arg)
+        self.huri.stop_event.set()
 
     def do_exit(self, arg) -> None:
         "Exit HuRi."

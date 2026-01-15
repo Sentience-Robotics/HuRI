@@ -37,6 +37,7 @@ def main() -> None:
         huri.stop()
     except Exception as e:
         logging.getLogger(__name__).error(e)
+        huri.stop()
 
 
 if __name__ == "__main__":
