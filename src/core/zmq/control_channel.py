@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import zmq
 
-from src.core.events import Command, CommandEvent
+from src.core.events import Control, ControlEvent
 from src.tools.logger import logging, setup_logger
 
 
@@ -15,12 +15,15 @@ class Router:
         self,
         hostname: str,
         port: int,
+        handler: Callable[[bytes, ControlEvent], bool],
         logger: Optional[logging.Logger] = setup_logger("Router"),
     ):
         self.ctx = zmq.Context.instance()
         self.router: zmq.Socket[bytes] = self.ctx.socket(zmq.ROUTER)
         self.hostname = hostname
         self.port = port
+
+        self.handler = handler
 
         self._stop_event = None
         self._poll_thread = None
@@ -30,7 +33,7 @@ class Router:
 
         self.logger = logger or logging.getLogger(__name__)
 
-    def _register_dealer(
+    def register_dealer(
         self, identity: bytes, auth: str, name: str, config: Dict[str, Any]
     ) -> None:
         if auth != "oui":
@@ -38,9 +41,6 @@ class Router:
 
         self.dealers[identity] = config
         self.logger.info(f"Dealer registered: {identity}")
-
-        self.send_command(identity, Command.AUTH_OK)
-        self.send_command(identity, Command.START)
 
     def _poll(self) -> None:  # todo poller
         """
@@ -51,12 +51,13 @@ class Router:
         while not self._stop_event.is_set():
             try:
                 identity, *data = self.router.recv_multipart()
-                command = CommandEvent.deserialize(data)
+                event = ControlEvent.deserialize(data)
 
-                if command.cmd == Command.REGISTER:
-                    self._register_dealer(identity, **command.payload)
+                if self.handler(identity, event) is False:
+                    self.logger.warning("Could not execute control")
                 else:
-                    raise Exception(f"Dealer {identity} sent {command.cmd}")
+                    self.logger.info("Control executed")
+
             except zmq.Again:
                 continue
             except Exception as e:
@@ -93,8 +94,8 @@ class Router:
 
         self._started = False
 
-    def send_command(
-        self, dealer_identity: str, command: Command, **kwargs: Mapping[str, Any]
+    def send_control(
+        self, dealer_identity: str, Control: Control, **kwargs: Mapping[str, Any]
     ) -> None:
         if self._started is False:
             raise Exception("not started")
@@ -102,16 +103,16 @@ class Router:
         if dealer_identity not in self.dealers:
             raise ValueError(f"Dealer {dealer_identity} not registered")
 
-        event = CommandEvent(cmd=command, payload=kwargs)
-        self.logger.info(f"Sending Command {command} to: {dealer_identity}")
+        event = ControlEvent(cmd=Control, payload=kwargs)
+        self.logger.info(f"Sending Control {Control} to: {dealer_identity}")
         self.router.send_multipart([dealer_identity] + event.serialize())
 
-    def send_commands(self, command: Command, **kwargs: Mapping[str, Any]) -> None:
+    def send_controls(self, Control: Control, **kwargs: Mapping[str, Any]) -> None:
         if self._started is False:
             raise Exception("not started")
 
         for dealer_identity, _ in self.dealers.items():
-            self.send_command(dealer_identity, command, **kwargs)
+            self.send_control(dealer_identity, Control, **kwargs)
 
 
 class Dealer:  # todo heartbeat
@@ -119,7 +120,7 @@ class Dealer:  # todo heartbeat
         self,
         hostname: str,
         port: int,
-        handler: Callable[[Command], bool],
+        handler: Callable[[Control], bool],
         logger: Optional[logging.Logger] = None,
         identity: Optional[str] = None,
     ):
@@ -147,10 +148,10 @@ class Dealer:  # todo heartbeat
         while not self._stop_event.is_set():
             try:
                 data = self.dealer.recv_multipart()
-                command = CommandEvent.deserialize(data)
+                Control = ControlEvent.deserialize(data)
 
-                self.logger.info(f"Received Command {command.cmd}")
-                result = self.handler(command)
+                self.logger.info(f"Received Control {Control.cmd}")
+                result = self.handler(Control)
 
                 # self.dealer.send_multipart([b"RESULT", result])
             except zmq.Again:
@@ -162,7 +163,7 @@ class Dealer:  # todo heartbeat
         """
         Connect to endpoint.
         Launch a poll loop thread.
-        Send Register command (wip).
+        Send Register Control (wip).
         """
         if self._started is True:
             raise Exception("already started")
@@ -176,8 +177,8 @@ class Dealer:  # todo heartbeat
         self._poll_thread = threading.Thread(target=self._poll)
         self._poll_thread.start()
 
-        register = CommandEvent(
-            cmd=Command.REGISTER,
+        register = ControlEvent(
+            cmd=Control.REGISTER,
             payload={
                 "auth": "oui",
                 "name": self.identity,

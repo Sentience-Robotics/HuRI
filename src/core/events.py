@@ -32,6 +32,7 @@ class Control(Enum):
     # Agent -> HuRI
     REGISTER = "REGISTER"  # send auth + agent config
     HEARTBEAT = "HEARTBEAT"  # send agent heartbeat + modified config
+    EXITED = "EXITED"  # send exited info
     # HuRI -> Agents
     AUTH_OK = "AUTH_OK"  # send huri config (after)
     START = "START"  # start all modules

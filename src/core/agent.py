@@ -6,7 +6,7 @@ from multiprocessing.synchronize import Event
 from typing import Any, Dict, Mapping
 import sys
 import os
-from src.core.events import Command, CommandEvent
+from src.core.events import Control, ControlEvent
 
 from src.modules.factory import ModuleFactory
 from src.tools.logger import logging, setup_logger
@@ -121,26 +121,26 @@ class Agent:
             f"Agent {self.dealer.identity}", log_queue=self.log_pusher.log_queue
         )
 
-    def _command_handler(self, command: CommandEvent) -> bool:  # todo data race ?
-        match command.cmd:
-            case Command.AUTH_OK:
+    def _control_handler(self, command: ControlEvent) -> bool:  # todo data race ?
+        match command.ctrl:
+            case Control.AUTH_OK:
                 self.auth_ok.set()
                 return True
-            case Command.START:
+            case Control.START:
                 for name in list(self.modules.keys()):
                     self.start_module(name)
                 return True
-            case Command.STOP:
+            case Control.STOP:
                 for name in list(self.processes.keys()):
                     self.stop_module(name)
                 return True
-            case Command.START_MODULE:
+            case Control.START_MODULE:
                 return self.start_module(**command.payload)
-            case Command.STOP_MODULE:
+            case Control.STOP_MODULE:
                 return self.stop_module(**command.payload)
-            case Command.STATUS:
+            case Control.STATUS:
                 return self.status()
-            case Command.EXIT:
+            case Control.EXIT:
                 "Stop run loop"
                 self.stop_event.set()
                 os.close(sys.stdin.fileno())
