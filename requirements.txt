@@ -1,0 +1,12 @@
+deepfilternet
+sounddevice
+soundfile
+simpleaudio
+torch
+torchaudio
+transformers
+langchain-community
+langchain-chroma
+langchain-ollama
+langgraph
+openai-whisper @ git+https://github.com/openai/whisper.git
