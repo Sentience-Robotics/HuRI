@@ -1,15 +1,8 @@
-import queue
-import threading
-import time
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
-import sounddevice as sd
 
 from src.core.module import Module
-
-# from src.core.reactive_layer.IOprocessor import IOprocessor
-# from src.core.reactive_layer.IOgestion import IOgestion
 
 
 class MIC(Module):
@@ -24,8 +17,9 @@ class MIC(Module):
 
         self.THRESHOLD: int = threshold
 
-    async def process(self, data: bytes) -> np.ndarray:
+    async def process(self, data: bytes) -> Optional[np.ndarray]:
         audio_array = np.frombuffer(data, dtype=np.int16)
         if np.abs(audio_array).mean() > self.THRESHOLD:
-            audio_array = audio_array.astype(np.float32) / 32768.0
-            return audio_array
+            audio_array_float = audio_array.astype(np.float32) / 32768.0
+            return audio_array_float
+        return None

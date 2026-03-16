@@ -1,7 +1,4 @@
-import asyncio
-import queue
-import threading
-from typing import Optional
+from typing import Any, List, Optional
 
 import numpy as np
 import whisper
@@ -21,7 +18,7 @@ class STTHandle:
 
         self.model: whisper.Whisper = whisper.load_model(model_name)
 
-    async def process(self, audio_array: np.ndarray) -> Optional[str]:
+    async def process(self, audio_array: np.ndarray) -> Optional[Any]:
         result: dict = self.model.transcribe(
             audio_array.copy(), condition_on_previous_text=False, fp16=False
         )
@@ -39,10 +36,10 @@ class STT(Module):
     def __init__(self, stt_handle: handle.DeploymentHandle[STTHandle]):
         self.stt = stt_handle
 
-        self.chunks = []
+        self.chunks: List[np.ndarray] = []
         self.running = False
 
-    async def process(self, audio: np.ndarray) -> Optional[str]:
+    async def process(self, audio: np.ndarray) -> Optional[Any]:
         self.chunks.append(audio)
         if self.running is True:
             return None
@@ -50,5 +47,4 @@ class STT(Module):
         text = await self.stt.process.remote(np.concatenate(self.chunks, axis=0))
         self.chunks.clear()
         self.running = False
-        print(text)
         return text

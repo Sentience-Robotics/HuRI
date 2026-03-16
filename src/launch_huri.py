@@ -10,9 +10,9 @@ def main() -> None:
     ray.init()
 
     services: Dict[str, handle.DeploymentHandle] = {
-        "stt": STTHandle.bind(),
+        "stt": STTHandle.bind(),  # type: ignore[attr-defined]
     }
-    app = HuRI.bind("", services)
+    app = HuRI.bind("", services)  # type: ignore[attr-defined]
     time.sleep(0.1)
     try:
         serve.run(app, name="HuRI", blocking=True)

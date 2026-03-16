@@ -1,12 +1,13 @@
-from src.core.module import Module
-from src.core.huri import WebSocket
 from typing import Any
+
+from src.core.huri import WebSocket
+from src.core.module import Module
 
 
 class Sender(Module):
     """Module to send output data to the client"""
 
-    input_type = ...
+    input_type = None
     output_type = None
 
     def __init__(self, ws: WebSocket, type: str):
