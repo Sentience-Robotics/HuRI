@@ -1,50 +1,54 @@
+import asyncio
 import queue
 import threading
+from typing import Optional
 
 import numpy as np
 import whisper
+from ray import serve
+from ray.serve import handle
 
 from src.core.module import Module
 
 
-class SpeechToText(Module):
+@serve.deployment(num_replicas=5)
+class STTHandle:
     def __init__(
         self,
-        model_name: str = "base.en",
-        device: str = "cpu",
-        sample_rate: int = 16000,
+        model_name: str = "base",
     ):
         super().__init__()
-        print(model_name)
-        if device == "cpu":
-            import warnings
 
-            warnings.filterwarnings(
-                "ignore", message="FP16 is not supported on CPU; using FP32 instead"
-            )
-        self.model: whisper.Whisper = whisper.load_model(model_name, device=device)
-        self.SAMPLE_RATE: int = sample_rate
-        self.running: bool = False
-        self.audio_queue: queue.Queue = queue.Queue()
-        self.transcriptions: queue.Queue = queue.Queue()
-        self.pause_record = threading.Semaphore(1)
-        self.audio_to_process = threading.Semaphore(0)
-        self.prompt_available = threading.Semaphore(0)
-        self.noise_profile: np.ndarray
+        self.model: whisper.Whisper = whisper.load_model(model_name)
 
-    def process_audio(self, buffer: bytes) -> None:
-        if not buffer:
-            return
-
-        audio_array = np.frombuffer(buffer, dtype=np.int16)
-        audio_array = audio_array.astype(np.float32) / 32768.0
-
-        result: dict = self.model.transcribe(audio_array, language="en")
+    async def process(self, audio_array: np.ndarray) -> Optional[str]:
+        result: dict = self.model.transcribe(
+            audio_array.copy(), condition_on_previous_text=False, fp16=False
+        )
         result["text"] = result["text"].strip()
         if not result["text"] or result["text"] == "":
-            return
+            return None
 
-        self.publish("text.in", text=result["text"])
+        return result["text"]
 
-    def set_subscriptions(self) -> None:
-        self.subscribe("speech.in", self.process_audio)
+
+class STT(Module):
+    input_type = "voice"
+    output_type = "text"
+
+    def __init__(self, stt_handle: handle.DeploymentHandle[STTHandle]):
+        self.stt = stt_handle
+
+        self.chunks = []
+        self.running = False
+
+    async def process(self, audio: np.ndarray) -> Optional[str]:
+        self.chunks.append(audio)
+        if self.running is True:
+            return None
+        self.running = True
+        text = await self.stt.process.remote(np.concatenate(self.chunks, axis=0))
+        self.chunks.clear()
+        self.running = False
+        print(text)
+        return text
