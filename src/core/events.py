@@ -1,65 +1,33 @@
-import json
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Dict, List, Mapping, Sequence
+import asyncio
+from collections import defaultdict
+
+from .module import Module
 
 
-@dataclass
-class ModuleEvent:
-    """
-    Inter-Module communication event
-    Module subscribe to a topic and link a callback.
-    The payload must correspond to a mapping of params of the callback.
-    """
+class EventGraph:
 
-    topic: str
-    payload: Mapping[str, Any]
+    def __init__(self):
 
-    @classmethod
-    def from_dict(cls, raw: Dict):
-        return cls(topic=raw["topic"], payload=raw["payload"])
+        self.subscribers = defaultdict(list)
 
-    def serialize(self) -> Sequence:
-        return [self.topic.encode(), json.dumps(self.payload).encode()]
+    def register(self, module: Module):
+        self.subscribers[module.input_type].append(module)
 
-    @classmethod
-    def deserialize(cls, raw: List[bytes]):
-        topic, payload = raw
-        return cls(topic=topic.decode(), payload=json.loads(payload.decode()))
+    async def publish(self, event_topic, data):
+        for module in self.subscribers[event_topic]:
+            asyncio.create_task(self._run(module, data))
 
+    async def _run(self, module: Module, data):
 
-class Control(Enum):
-    # Agent -> HuRI
-    REGISTER = "REGISTER"  # send auth + agent config
-    HEARTBEAT = "HEARTBEAT"  # send agent heartbeat + modified config
-    EXITED = "EXITED"  # send exited info
-    # HuRI -> Agents
-    AUTH_OK = "AUTH_OK"  # send huri config (after)
-    START = "START"  # start all modules
-    STOP = "STOP"  # stop all modules
-    START_MODULE = "START_MODULE"  # start specific modules
-    STOP_MODULE = "STOP_MODULE"  # stop specific modules
-    EXIT = "EXIT"  # exit agent
+        result = module.process(data)
 
+        if hasattr(result, "__aiter__"):
+            async for item in result:
+                if item is None:
+                    continue
+                await self.publish(module.output_type, item)
 
-@dataclass
-class ControlEvent:
-    ctrl: Control
-    payload: Mapping[str, Any]
-
-    @classmethod
-    def from_dict(cls, raw: Dict):
-        return cls(ctrl=Control(raw["ctrl"]), payload=raw["payload"])
-
-    def serialize(self) -> Sequence:
-        print(self.ctrl.value)
-
-        return [
-            self.ctrl.value.encode(),
-            json.dumps(self.payload).encode(),
-        ]
-
-    @classmethod
-    def deserialize(cls, raw: List[bytes]):
-        ctrl, payload = raw
-        return cls(ctrl=Control(ctrl.decode()), payload=json.loads(payload.decode()))
+        else:
+            value = await result
+            if value is not None:
+                await self.publish(module.output_type, value)
