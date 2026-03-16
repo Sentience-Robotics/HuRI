@@ -1,136 +1,49 @@
-import sys
-import threading
-from dataclasses import dataclass
-
-from src.tools.logger import setup_logger
+import uuid
 from typing import Dict
-from .zmq.control_channel import Router
-from src.core.events import Control, ControlEvent
-from .zmq.event_proxy import EventProxy
-from .zmq.log_channel import LogPuller
-from src.core.agent import AgentConfig
+
+from fastapi import FastAPI, WebSocket
+from ray import serve
+from ray.serve import handle
+
+from src.modules.speech_to_text.record_speech import MIC
+from src.modules.speech_to_text.speech_to_text import STT
+from src.modules.utils.sender import Sender
+
+from .session import Session
+
+app = FastAPI()
 
 
-@dataclass
-class RouterConfig:
-    port: int
-
-
-@dataclass
-class EventProxyConfig:
-    xsub: int
-    xpub: int
-
-
-@dataclass
-class LogPullerConfig:
-    port: int
-
-
-@dataclass
-class HuriConfig:
-    hostname: str
-    router: RouterConfig
-    event_proxy: EventProxyConfig
-    log_puller: LogPullerConfig
-
-    @classmethod
-    def from_dict(cls, raw: dict):
-        return cls(
-            hostname=raw["hostname"],
-            router=RouterConfig(**raw["router"]),
-            event_proxy=EventProxyConfig(**raw["event-proxy"]),
-            log_puller=LogPullerConfig(**raw["log-puller"]),
-        )
-
-
-@dataclass
-class AgentStatus:
-    update_time: int
-    config: AgentConfig
-    status: Dict[str, int]
-
-    @classmethod
-    def from_dict(cls, raw: dict):
-        return cls(
-            update_time=raw["update_time"],
-            config=AgentConfig.from_dict(raw["config"]),
-            status=raw["status"],
-        )
-
-
+@serve.deployment
+@serve.ingress(app)
 class HuRI:
-    """Wait for Agent to connect, handle module communication and Logging"""
-
-    def __init__(self, config: HuriConfig) -> None:
+    def __init__(self, config, handles: Dict[str, handle.DeploymentHandle]) -> None:
         self.config = config
+        self.handles = handles
 
-        self.router = Router(config.hostname, config.router.port, self._control_handler)
-        self.event_proxy = EventProxy(
-            config.hostname, "", config.event_proxy.xpub, config.event_proxy.xsub
-        )
-        self.log_channel = LogPuller(config.hostname, config.log_puller.port)
+        self.clients: Dict[str, Session] = {}
 
-        self.agents: Dict[bytes, AgentStatus] = {}
+    @app.websocket("/session")
+    async def run_session(self, ws: WebSocket):
+        await ws.accept()
 
-        self.stop_event = threading.Event()
+        modules = [
+            STT(self.handles["stt"]),
+            MIC(5),
+            Sender(ws, "text"),
+        ]
+        session_id = str(uuid.uuid4())
 
-        self.logger = setup_logger("HuRI")
+        self.clients[session_id] = Session(modules)
 
-    def _control_handler(
-        self, identity: bytes, event: ControlEvent
-    ) -> bool:  # todo data race ?
-        match event.ctrl:
-            case Control.REGISTER:
-                if event.payload["auth"] != "oui":  # todo wip
-                    return False
-                self.router.dealers[identity] = True
-                self.agents[identity] = AgentStatus.from_dict(**event.payload["agent"])
+        async def receive_loop(session: Session, ws: WebSocket):
+            while True:
+                msg = await ws.receive()
+                if "bytes" in msg:
+                    chunk = msg["bytes"]
+                    await session.publish("chunk", chunk)
+                # else:
+                #     data = msg
+                #     await session.publish(data["type"], data["data"])
 
-                self.router.send_control(
-                    identity, Control.AUTH_OK, self.config
-                )  # todo send all config ?
-                self.router.send_control(identity, Control.START)
-                return True
-            case Control.HEARTBEAT:
-                # previous_config = self.router.dealers[identity]
-                # self.agents[identity] = todo
-                # todo AgentStatus concat
-                return True
-            case Control.EXITED:
-                del self.router.dealers[identity]
-                del self.agents[identity]
-            case _:
-                return False  # todo log
-
-    def run(self) -> None:
-        """
-        Start LogPuller.
-        Start Router.
-        Start EventProxy.
-        Then loop over RobotShell.cmdloop() to use HuRI commands.
-        Then, when exit is requested, call stop()
-        """
-
-        "Used to handle log filtering and displaying"
-        self.log_channel.start()
-        "Used to handle Agent registration and control"
-        self.router.start()
-        "Used to handle inter-module communication, though events"
-        self.event_proxy.start(False, False)
-
-        if not sys.stdin.isatty():
-            self.stop_event.wait()
-            return
-
-        from src.core.shell import RobotShell
-
-        RobotShell(self).cmdloop()
-
-        self.stop()
-
-    def stop(self) -> None:
-        self.router.stop()
-        self.event_proxy.stop()
-        self.log_channel.stop()
-        print("Fully stopped")
+        await receive_loop(self.clients[session_id], ws)
