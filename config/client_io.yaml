@@ -1,0 +1,19 @@
+huri_url: ws://localhost:8000/session
+
+topic_list: ["text"]
+
+modules:
+  inp:
+    name: INP
+    logging: INFO
+  out:
+    name: OUT
+    logging: INFO
+  mod:
+    name: MOD
+    logging: INFO
+  rag:
+    name: RAG
+    args:
+      model: deepseek-v2:16b
+    logging: INFO

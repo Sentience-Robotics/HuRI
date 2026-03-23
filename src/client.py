@@ -1,18 +1,42 @@
+import argparse
 import asyncio
+import json
+from dataclasses import asdict
 
 import numpy as np
 import sounddevice as sd
 import websockets
+import yaml
 
-SERVER_URL = "ws://localhost:8000/session"
+from src.core.dataclasses.config import ClientConfig
+
+
+def load_client_config(path: str) -> ClientConfig:
+    with open(path) as f:
+        raw = yaml.safe_load(f)
+
+        return ClientConfig.from_dict(raw)
+
+
 CHUNK_DURATION = 1
 SAMPLE_RATE = 16000
 
 
 async def stream_audio():
+    parser = argparse.ArgumentParser(description="Client config")
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to Client config file (YAML)",
+    )
 
-    async with websockets.connect(SERVER_URL) as ws:
+    args = parser.parse_args()
+    config = load_client_config(args.config)
+
+    async with websockets.connect(config.huri_url) as ws:
         print("Connected to server")
+
+        await ws.send(json.dumps(asdict(config)))
 
         async def receive(ws: websockets.ClientConnection):
             while True:

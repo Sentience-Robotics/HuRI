@@ -1,0 +1,13 @@
+huri_url: ws://localhost:8000/session
+
+topic_list: ["text"]
+
+modules:
+  mic:
+    name: mic
+    args:
+      threshold: 50
+    logging: INFO
+  stt:
+    name: stt
+    logging: INFO
