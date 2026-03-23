@@ -1,0 +1,34 @@
+from dataclasses import dataclass
+from typing import Any, Dict, List, Mapping
+
+
+@dataclass
+class ModuleConfig:
+    name: str
+    args: Mapping[str, Any]
+
+    @classmethod
+    def from_dict(self, raw: dict) -> "ModuleConfig":
+        return self(
+            name=raw["name"],
+            args=raw.get("args", {}),
+        )
+
+
+@dataclass
+class ClientConfig:
+    huri_url: str
+    topic_list: List[str]
+    modules: Dict[str, ModuleConfig]
+
+    @classmethod
+    def from_dict(cls, raw: Dict) -> "ClientConfig":
+        modules = {
+            module_id: ModuleConfig.from_dict(mod_raw)
+            for module_id, mod_raw in raw.get("modules", {}).items()
+        }
+        return cls(
+            huri_url=raw["huri_url"],
+            topic_list=raw["topic_list"],
+            modules=modules,
+        )
