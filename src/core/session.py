@@ -1,8 +1,11 @@
+from typing import List
+
 from .events import EventGraph
+from .module import Module
 
 
 class Session:
-    def __init__(self, modules):
+    def __init__(self, modules: List[Module]):
         self.event_graph = EventGraph()
 
         for module in modules:

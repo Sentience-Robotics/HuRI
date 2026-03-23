@@ -1,6 +1,7 @@
 from typing import Any
 
-from src.core.huri import WebSocket
+from fastapi import WebSocket
+
 from src.core.module import Module
 
 

@@ -1,25 +1,29 @@
 import uuid
-from typing import Dict
+from typing import Dict, List, Type
 
-from fastapi import FastAPI, WebSocket
+from fastapi import WebSocket
 from ray import serve
 from ray.serve import handle
 
-from src.modules.speech_to_text.record_speech import MIC
-from src.modules.speech_to_text.speech_to_text import STT
+from src.modules.factory import Module, ModuleFactory
 from src.modules.utils.sender import Sender
 
+from .app import app
+from .dataclasses.config import ClientConfig
 from .session import Session
-
-app = FastAPI()
 
 
 @serve.deployment
 @serve.ingress(app)
 class HuRI:
-    def __init__(self, config, handles: Dict[str, handle.DeploymentHandle]) -> None:
-        self.config = config
-        self.handles = handles
+    def __init__(
+        self,
+        modules: Dict[str, Type[Module]],
+        handles: Dict[str, handle.DeploymentHandle],
+    ) -> None:
+        self.factory = ModuleFactory(handles)
+        for name, module_cls in modules.items():
+            self.factory.register(name, module_cls)
 
         self.clients: Dict[str, Session] = {}
 
@@ -27,14 +31,22 @@ class HuRI:
     async def run_session(self, ws: WebSocket):
         await ws.accept()
 
-        modules = [
-            STT(self.handles["stt"]),
-            MIC(5),
-            Sender(ws, "text"),
+        client_config_raw: Dict = await ws.receive_json()
+
+        client_config = ClientConfig.from_dict(client_config_raw)
+
+        senders: List[Module] = [
+            Sender(ws, topic) for topic in client_config.topic_list
         ]
+        modules: List[Module] = (
+            self.factory.create_from_config(client_config.modules) + senders
+        )
+
         session_id = str(uuid.uuid4())
 
         self.clients[session_id] = Session(modules)
+
+        print("Client registered successfully with config:", client_config)
 
         async def receive_loop(session: Session, ws: WebSocket):
             while True:
