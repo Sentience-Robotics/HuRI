@@ -2,7 +2,7 @@ lint:
 	black .
 	isort .
 	flake8 .
-	mypy .
+	mypy . --check-untyped-defs
 
 test:
 	pytest
