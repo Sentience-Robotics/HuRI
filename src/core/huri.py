@@ -1,97 +1,49 @@
-import sys
-import threading
-from dataclasses import dataclass
+import uuid
 from typing import Dict
 
-from src.tools.logger import setup_logger
+from fastapi import FastAPI, WebSocket
+from ray import serve
+from ray.serve import handle
 
-from .zmq.control_channel import Router
-from .zmq.event_proxy import EventProxy
-from .zmq.log_channel import LogPuller
+from src.modules.speech_to_text.record_speech import MIC
+from src.modules.speech_to_text.speech_to_text import STT
+from src.modules.utils.sender import Sender
 
+from .session import Session
 
-@dataclass
-class RouterConfig:
-    port: int
-
-
-@dataclass
-class EventProxyConfig:
-    xsub: int
-    xpub: int
+app = FastAPI()
 
 
-@dataclass
-class LogPullerConfig:
-    port: int
-
-
-@dataclass
-class HuriConfig:
-    hostname: str
-    router: RouterConfig
-    event_proxy: EventProxyConfig
-    log_puller: LogPullerConfig
-
-    @classmethod
-    def from_dict(cls, raw: dict):
-        return cls(
-            hostname=raw["hostname"],
-            router=RouterConfig(**raw["router"]),
-            event_proxy=EventProxyConfig(**raw["event-proxy"]),
-            log_puller=LogPullerConfig(**raw["log-puller"]),
-        )
-
-
+@serve.deployment
+@serve.ingress(app)
 class HuRI:
-    """Wait for Agent to connect, handle module communication and Logging"""
+    def __init__(self, config, handles: Dict[str, handle.DeploymentHandle]) -> None:
+        self.config = config
+        self.handles = handles
 
-    def __init__(self, config: HuriConfig) -> None:
-        self.router = Router(config.hostname, config.router.port)
-        self.event_proxy = EventProxy(
-            config.hostname, "", config.event_proxy.xpub, config.event_proxy.xsub
-        )
-        self.log_channel = LogPuller(config.hostname, config.log_puller.port)
+        self.clients: Dict[str, Session] = {}
 
-        self.threads: Dict[str, threading.Thread] = {}
+    @app.websocket("/session")
+    async def run_session(self, ws: WebSocket):
+        await ws.accept()
 
-        self.logger = setup_logger("HuRI")
+        modules = [
+            STT(self.handles["stt"]),
+            MIC(5),
+            Sender(ws, "text"),
+        ]
+        session_id = str(uuid.uuid4())
 
-    def _start_router(self) -> None:
-        """Used to handle Agent registration and control"""
-        self.threads["Router"] = threading.Thread(target=self.router.start)
-        self.threads["Router"].start()
+        self.clients[session_id] = Session(modules)
 
-    def _start_event_proxy(self) -> None:
-        """Used to handle inter-module communication, though events"""
-        self.threads["EventProxy"] = threading.Thread(
-            target=self.event_proxy.start, args=[False, False]
-        )
-        self.threads["EventProxy"].start()
+        async def receive_loop(session: Session, ws: WebSocket):
+            while True:
+                msg = await ws.receive()
+                if "bytes" in msg:
+                    chunk = msg["bytes"]
+                    await session.publish("chunk", chunk)
+                # else:
+                #     data = msg
+                #     await session.publish(data["type"], data["data"])
 
-    def _start_log_channel(self) -> None:
-        """Used to handle Agent registration and control"""
-        self.threads["LogChannel"] = threading.Thread(target=self.log_channel.start)
-        self.threads["LogChannel"].start()
-
-    def run(self) -> None:
-        self._start_log_channel()
-        self._start_router()
-        self._start_event_proxy()
-
-        if not sys.stdin.isatty():
-            threading.Event().wait()
-            return
-
-        from src.core.shell import RobotShell
-
-        RobotShell(self).cmdloop()
-
-    def stop(self) -> None:
-        self.router.stop()
-        self.event_proxy.stop()
-        self.log_channel.stop()
-        for name, thread in self.threads.items():
-            self.logger.info(f"Stopping {name} thread...")
-            thread.join(timeout=5)
-            self.logger.info(f"{name} thread stopped")
+        await receive_loop(self.clients[session_id], ws)
