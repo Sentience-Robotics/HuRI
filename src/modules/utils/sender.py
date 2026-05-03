@@ -9,7 +9,8 @@ from src.core.module import Module
 class Sender(Module):
     """Sender Module
 
-    Send output data to the client. This data must be JSON serialisable, like a dataclass.
+    Send output data to the client.
+    This data must be JSON serialisable, like a dataclass.
 
     input: auto, output: None"""
 

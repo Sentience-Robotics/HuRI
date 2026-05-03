@@ -24,9 +24,13 @@ class STT(Module):
     input: voice,
     output: transcript
 
-    :model: size of the model to use (tiny, tiny.en, base, base.en, small, small.en, distil-small.en, medium, medium.en, distil-medium.en, large-v1, large-v2, large-v3, large, distil-large-v2, distil-large-v3, large-v3-turbo, or turbo)
-    :language: language spoken in the audio. It should be a language code such as "en" or "fr".
-    :sample_rate: size of received voice audio. usually 8000, 16000 or 48000.
+    :model: size of the model to use (tiny, tiny.en, base, base.en, small,
+        small.en, distil-small.en, medium, medium.en, distil-medium.en,
+        large-v1, large-v2, large-v3, large, distil-large-v2, distil-large-v3,
+        large-v3-turbo, or turbo).
+    :language: language spoken in the audio. It should be a language code such
+        as "en" or "fr".
+    :sample_rate: size of received voice audio. Usually 8000, 16000 or 48000.
     :block_duration: size of received voice audio (in s).
     """
 

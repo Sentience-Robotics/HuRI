@@ -22,8 +22,9 @@ class MIC(Module):
 
     :vad_agressiveness: from 0 (low) to 3 (high, can distord audio).
     :silence_duration: how many seconds will a no voice be considered a silence.
-    :sample_rate: size of received chunk of audio. usually 8000, 16000 or 48000.
-    :block_duration: size of received chunk of audio (in s). can only be 0.010, 0.020 and 0.030.
+    :sample_rate: size of received chunk of audio. Usually 8000, 16000 or 48000.
+    :block_duration: size of received chunk of audio (in s).
+        Can only be 0.010, 0.020 and 0.030.
     """
 
     input_type = "chunk"

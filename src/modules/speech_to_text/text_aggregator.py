@@ -1,10 +1,10 @@
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Optional
-from .speech_to_text import Transcript
 
 from src.core.module import Module
 
-from difflib import SequenceMatcher
+from .speech_to_text import Transcript
 
 
 @dataclass
@@ -37,7 +37,7 @@ class TAG(Module):
 
         return current[: match.a] + new[match.b :]
 
-    async def process(self, transcript: Transcript) -> Optional[Transcript]:
+    async def process(self, transcript: Transcript) -> Optional[Sentence]:
         text = transcript.text
 
         if text != "":
