@@ -16,5 +16,5 @@ modules:
   stt:
     name: stt
     args:
-      voice_block_duration: ${frame_duration}
+      block_duration: ${frame_duration}
     logging: INFO
