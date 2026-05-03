@@ -2,24 +2,25 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict
+from typing import Dict
 
 import numpy as np
 import sounddevice as sd
 import websockets
-import yaml
+from omegaconf import OmegaConf
 
 from src.core.dataclasses.config import ClientConfig
 
 
 def load_client_config(path: str) -> ClientConfig:
     with open(path) as f:
-        raw = yaml.safe_load(f)
+        dict_config = OmegaConf.load(f)
+        raw_resolved = OmegaConf.to_container(dict_config, resolve=True)
 
-        return ClientConfig.from_dict(raw)
+        if not isinstance(raw_resolved, Dict):
+            raise RuntimeError("error yaml does not output a dict")
 
-
-CHUNK_DURATION = 1
-SAMPLE_RATE = 16000
+        return ClientConfig.from_dict(raw_resolved)
 
 
 async def stream_audio():
@@ -33,6 +34,7 @@ async def stream_audio():
     args = parser.parse_args()
     config = load_client_config(args.config)
 
+    FRAME_SIZE = int(config.sample_rate * config.frame_duration)
     async with websockets.connect(config.huri_url) as ws:
         print("Connected to server")
 
@@ -52,11 +54,11 @@ async def stream_audio():
                 loop.call_soon_threadsafe(queue.put_nowait, indata.copy())
 
             with sd.InputStream(
-                samplerate=SAMPLE_RATE,
+                samplerate=config.sample_rate,
                 channels=1,
                 dtype="int16",
                 callback=callback,
-                blocksize=int(CHUNK_DURATION * SAMPLE_RATE),
+                blocksize=FRAME_SIZE,
             ):
                 while True:
                     chunk = await queue.get()

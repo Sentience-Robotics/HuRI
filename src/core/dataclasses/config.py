@@ -19,6 +19,8 @@ class ModuleConfig:
 class ClientConfig:
     huri_url: str
     topic_list: List[str]
+    sample_rate: float
+    frame_duration: float
     modules: Dict[str, ModuleConfig]
 
     @classmethod
@@ -30,5 +32,7 @@ class ClientConfig:
         return cls(
             huri_url=raw["huri_url"],
             topic_list=raw["topic_list"],
+            sample_rate=raw["sample_rate"],
+            frame_duration=raw["frame_duration"],
             modules=modules,
         )
