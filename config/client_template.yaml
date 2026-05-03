@@ -1,0 +1,15 @@
+# HuRI websocket server url
+huri_url: ws://localhost:8000/session
+
+# List of event topic the client will receive
+topic_list: ["topic1", "topic2"]
+
+# Define module custom args
+modules:
+  # module tag can be anything
+  example:
+    # module name must be in the list of available module in HuRI's instance (src.modules.modules:get_modules)
+    name: my_module
+    # if my_module init with "model", "sample_rate" and "hello" params, they can be customized here
+    args:
+      hello: "world"
