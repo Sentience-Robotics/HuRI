@@ -16,6 +16,7 @@ modules:
   stt:
     name: stt
     args:
+      language: "fr"
       block_duration: ${frame_duration}
     logging: INFO
   tag:
