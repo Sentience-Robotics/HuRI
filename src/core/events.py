@@ -18,16 +18,25 @@ class EventGraph:
             asyncio.create_task(self._run(module, data))
 
     async def _run(self, module: Module, data):
+        try:
+            result = module.process(data)
 
-        result = module.process(data)
+            if hasattr(result, "__aiter__"):
+                try:
+                    async for item in result:
+                        if item is None:
+                            continue
+                        await self.publish(module.output_type, item)
+                except Exception as e:
+                    print(f"[ERROR] async generator in {module}: {e}")
 
-        if hasattr(result, "__aiter__"):
-            async for item in result:
-                if item is None:
-                    continue
-                await self.publish(module.output_type, item)
+            else:
+                try:
+                    value = await result
+                    if value is not None:
+                        await self.publish(module.output_type, value)
+                except Exception as e:
+                    print(f"[ERROR] coroutine in {module}: {e}")
 
-        else:
-            value = await result
-            if value is not None:
-                await self.publish(module.output_type, value)
+        except Exception as e:
+            print(f"[ERROR] process() call failed in {module}: {e}")
