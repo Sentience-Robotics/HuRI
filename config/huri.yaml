@@ -18,8 +18,6 @@ applications:
     runtime_env: { RAY_COLOR_PREFIX=1 }
     deployments:
       - name: HuRI
-      - name: EMBHandle
-        num_replicas: 1
       - name: STTHandle
         autoscaling_config:
           min_replicas: 1
