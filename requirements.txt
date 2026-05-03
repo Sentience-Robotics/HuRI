@@ -5,15 +5,13 @@ flake8
 flake8-toml-config
 pytest
 
-deepfilternet
+
+# server
+numpy
+ray[default]
+
+
+# client
 sounddevice
-soundfile
-simpleaudio
-torch
-torchaudio
-transformers
-langchain-community
-langchain-chroma
-langchain-ollama
-langgraph
-openai-whisper @ git+https://github.com/openai/whisper.git
+websockets
+PyYAML
