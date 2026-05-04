@@ -5,10 +5,10 @@ import whisper
 from ray import serve
 from ray.serve import handle
 
-from src.core.module import Module
+from src.core.module import ModuleWithHandle
 
 
-@serve.deployment(num_replicas=5)
+@serve.deployment
 class STTHandle:
     def __init__(
         self,
@@ -18,7 +18,7 @@ class STTHandle:
 
         self.model: whisper.Whisper = whisper.load_model(model_name)
 
-    async def process(self, audio_array: np.ndarray) -> Optional[Any]:
+    async def transcribe(self, audio_array: np.ndarray) -> Optional[Any]:
         result: dict = self.model.transcribe(
             audio_array.copy(), condition_on_previous_text=False, fp16=False
         )
@@ -29,12 +29,14 @@ class STTHandle:
         return result["text"]
 
 
-class STT(Module):
+class STT(ModuleWithHandle):
+    _handle_cls = STTHandle
+
     input_type = "voice"
     output_type = "text"
 
-    def __init__(self, stt_handle: handle.DeploymentHandle[STTHandle]):
-        self.stt = stt_handle
+    def __init__(self, handle: handle.DeploymentHandle[STTHandle]):
+        super().__init__(handle)
 
         self.chunks: List[np.ndarray] = []
         self.running = False
@@ -44,7 +46,7 @@ class STT(Module):
         if self.running is True:
             return None
         self.running = True
-        text = await self.stt.process.remote(np.concatenate(self.chunks, axis=0))
+        text = await self.handle.transcribe.remote(np.concatenate(self.chunks, axis=0))
         self.chunks.clear()
         self.running = False
         return text

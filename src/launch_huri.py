@@ -2,17 +2,15 @@ import time
 
 import ray
 
-from src.core.huri import Dict, HuRI, handle, serve
-from src.modules.speech_to_text.speech_to_text import STTHandle
+from src.core.huri import serve
+
+from .app import build_app
 
 
 def main() -> None:
     ray.init()
 
-    services: Dict[str, handle.DeploymentHandle] = {
-        "stt": STTHandle.bind(),  # type: ignore[attr-defined]
-    }
-    app = HuRI.bind("", services)  # type: ignore[attr-defined]
+    app = build_app()
     time.sleep(0.1)
     try:
         serve.run(app, name="HuRI", blocking=True)
