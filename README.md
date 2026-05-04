@@ -26,18 +26,24 @@
 
 ## Usage
 
-Launch HuRI server:
+#### Launch HuRI server:
 
 ```sh
 serve run [config_file_path]
 ```
 
-We use ray serve config file, doc [here](https://docs.ray.io/en/latest/serve/configure-serve-deployment.html)
+We use ray serve config file, doc [here](https://docs.ray.io/en/latest/serve/configure-serve-deployment.html).
 
-Launch Client:
+You can also launch HuRI without config file:
+
+```sh
+python -m src.launch_huri
+```
+
+#### Launch Client:
 
 ```sh
 python -m src.client --config [client_config_file_path]
 ```
 
-We have custom yaml file to define modules to use and how they are initialized, template [here](config/client_template.yaml)
+We have custom yaml file to define modules to use and how they are initialized, template [here](config/client_template.yaml).

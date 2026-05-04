@@ -8,10 +8,12 @@ pytest
 
 # server
 numpy
-ray[default]
+ray[serve]
+webrtcvad
+faster-whisper
 
 
 # client
 sounddevice
 websockets
-PyYAML
+omegaconf
