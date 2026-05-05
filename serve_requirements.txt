@@ -1,0 +1,5 @@
+# server
+numpy
+ray[serve]
+webrtcvad
+faster-whisper
