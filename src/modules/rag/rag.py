@@ -79,7 +79,7 @@ class RAGHandle:
  
         # Option B: shared collection with user_id filter (recommended)
         collection = self.default_collection
-        filters = {"user_id": user_id}
+        filters = None #{"user_id": user_id}
  
         return collection, filters
 
