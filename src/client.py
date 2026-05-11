@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import os
 from dataclasses import asdict
 from typing import Dict
 
@@ -12,15 +13,29 @@ from omegaconf import OmegaConf
 from src.core.dataclasses.config import ClientConfig
 
 
+USER_ID_FILE = os.path.expanduser("~/.huri_user_id")
+
+
+def load_user_id() -> str | None:
+    if os.path.exists(USER_ID_FILE):
+        with open(USER_ID_FILE) as f:
+            return f.read().strip()
+    return None
+
+
+def save_user_id(user_id: str):
+    with open(USER_ID_FILE, "w") as f:
+        f.write(user_id)
+
 def load_client_config(path: str) -> ClientConfig:
     with open(path) as f:
         dict_config = OmegaConf.load(f)
-        raw_resolved = OmegaConf.to_container(dict_config, resolve=True)
+    raw_resolved = OmegaConf.to_container(dict_config, resolve=True)
 
-        if not isinstance(raw_resolved, Dict):
-            raise RuntimeError("error yaml does not output a dict")
+    if not isinstance(raw_resolved, Dict):
+        raise RuntimeError("error yaml does not output a dict")
 
-        return ClientConfig.from_dict(raw_resolved)
+    return ClientConfig.from_dict(raw_resolved)
 
 
 async def stream_audio():
@@ -38,7 +53,19 @@ async def stream_audio():
     async with websockets.connect(config.huri_url) as ws:
         print("Connected to server")
 
-        await ws.send(json.dumps(asdict(config)))
+        payload = asdict(config)
+        user_id = load_user_id()
+        if user_id:
+            payload["user_id"] = user_id
+            print(f"Reconnecting with user_id: {user_id}")
+
+        await ws.send(json.dumps(payload))
+
+        init_msg = json.loads(await ws.recv())
+        if init_msg.get("type") == "session_init":
+            user_id = init_msg["user_id"]
+            save_user_id(user_id)
+            print(f"Session started with user_id: {user_id}")
 
         async def receive(ws: websockets.ClientConnection):
             while True:

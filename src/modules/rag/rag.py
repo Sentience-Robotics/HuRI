@@ -79,7 +79,7 @@ class RAGHandle:
  
         # Option B: shared collection with user_id filter (recommended)
         collection = self.default_collection
-        filters = None #{"user_id": user_id}
+        filters = {"user_id": user_id}
  
         return collection, filters
 
@@ -131,7 +131,7 @@ class RAGHandle:
     ) -> tuple[str, str]:
 
         parts = [
-            "You are a helpful assistant. Answer based on the provided context.",
+            "You are a robot speaking to a user. Answer based on the provided context.",
             "If the context is insufficient, say so clearly.",
         ]
         if preferences.get("language"):
@@ -150,7 +150,7 @@ class RAGHandle:
             user_prompt = (
                 "No relevant context was found.\n\n"
                 f"Question: {question}\n\n"
-                "Answer based on general knowledge and mention no documents were found."
+                "Answer based on general knowledge."
             )
         else:
             context_parts = []
@@ -163,7 +163,7 @@ class RAGHandle:
             user_prompt = (
                 f"Context:\n{context_block}\n\n"
                 f"Question: {question}\n\n"
-                "Answer based on the context above. Cite sources by number."
+                "Answer based on the context above. Don't speak about the sources, just use them to answer the question."
             )
  
         return system_prompt, user_prompt

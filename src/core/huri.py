@@ -30,10 +30,16 @@ class HuRI:
     @app.websocket("/session")
     async def run_session(self, ws: WebSocket):
         await ws.accept()
-
         client_config_raw: Dict = await ws.receive_json()
-
         client_config = ClientConfig.from_dict(client_config_raw)
+
+        user_id = client_config_raw.get("user_id") or str(uuid.uuid4())
+        await ws.send_json({"type": "session_init", "user_id": user_id})
+        
+        if "rag" in client_config.modules:
+            if client_config.modules["rag"].args is None:
+                client_config.modules["rag"].args = {}
+            client_config.modules["rag"].args["user_id"] = user_id
 
         senders: List[Module] = [
             Sender(ws, topic) for topic in client_config.topic_list
@@ -43,9 +49,7 @@ class HuRI:
         )
 
         session_id = str(uuid.uuid4())
-
         self.clients[session_id] = Session(modules)
-
         print("Client registered successfully with config:", client_config)
 
         async def receive_loop(session: Session, ws: WebSocket):
