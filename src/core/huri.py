@@ -1,7 +1,7 @@
 import uuid
 from typing import Dict, List, Type
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 from ray import serve
 from ray.serve import handle
 
@@ -49,13 +49,15 @@ class HuRI:
         print("Client registered successfully with config:", client_config)
 
         async def receive_loop(session: Session, ws: WebSocket):
-            while True:
-                msg = await ws.receive()
-                if "bytes" in msg:
-                    chunk = msg["bytes"]
-                    await session.publish("chunk", chunk)
-                # else:
-                #     data = msg
-                #     await session.publish(data["type"], data["data"])
-
+            try:
+                while True:
+                    msg = await ws.receive()
+                    if "bytes" in msg:
+                        chunk = msg["bytes"]
+                        await session.publish("chunk", chunk)
+                    # else:
+                    #     data = msg
+                    #     await session.publish(data["type"], data["data"])
+            except (WebSocketDisconnect, RuntimeError):
+                print(f"Client disconnected")
         await receive_loop(self.clients[session_id], ws)
