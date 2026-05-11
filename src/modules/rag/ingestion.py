@@ -36,7 +36,6 @@ def main():
     client = QdrantClient(url=args.qdrant_url)
     model = SentenceTransformer("BAAI/bge-large-en-v1.5")
 
-    # Create collection if it doesn't exist
     collections = [c.name for c in client.get_collections().collections]
     if args.collection not in collections:
         client.create_collection(
@@ -45,7 +44,6 @@ def main():
         )
         print(f"Created collection: {args.collection}")
 
-    # Sample documents
     docs = [
         {"text": "The company budget for 2026 is 2 million euros.", "source": "budget.pdf"},
         {"text": "The project deadline is June 15th 2026.", "source": "planning.pdf"},
@@ -53,7 +51,6 @@ def main():
         {"text": "The main office is located in Paris, France.", "source": "info.pdf"},
     ]
 
-    # Embed and insert with user_id
     points = []
     for doc in docs:
         vector = model.encode(doc["text"], normalize_embeddings=True).tolist()
@@ -63,7 +60,7 @@ def main():
             payload={
                 "text": doc["text"],
                 "source": doc["source"],
-                "user_id": user_id,           # ← scoped to this user
+                "user_id": user_id,
             },
         ))
 
