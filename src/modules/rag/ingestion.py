@@ -396,7 +396,8 @@ if __name__ == "__main__":
         # Ingest multiple PDFs
         python ingestion.py pdf doc1.pdf doc2.pdf doc3.pdf
 
-        # Ingest a whole folder of PDFs
+        # Ingest a whole folder of PDFs 
+        # TODO: To verify and to add the support of hole paths
         python ingestion.py pdf ./my_documents/
 
         # Write text interactively (type, then Ctrl+D to save)
@@ -406,9 +407,13 @@ if __name__ == "__main__":
         python ingestion.py text notes.txt story.md
 
         # Specify a user ID (otherwise reads from ~/.huri_user_id)
-        python ingestion.py pdf report.pdf --user-id "abc-123"
+        python ingestion.py --user-id "abc-123" pdf report.pdf
 
         # Use a different collection
-        python ingestion.py pdf report.pdf --collection "my_docs"
+        python ingestion.py --collection "my_docs" pdf report.pdf
+
+        # Use a different ingestion strategy
+        python src/modules/rag/ingestion.py --chunking semantic --semantic-strategy threshold pdf "EN.pdf"
+
     """
     main()
