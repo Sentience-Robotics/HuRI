@@ -1,9 +1,8 @@
 from typing import Any, Optional
 from dataclasses import dataclass, field
  
-from ray import data, serve
-from ray.serve import handle
-from src.core.module import ModuleWithHandle
+from ray import serve
+from src.core.module import ModuleWithHandle, ModuleWithId, handle
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
@@ -15,7 +14,7 @@ import httpx
 @dataclass
 class RAGQuery:
     """What flows from RAG module to RAGHandle."""
-    user_id: str
+    _user_id: str
     question: str
     preferences: dict = field(default_factory=dict)
     # preferences can include: language, tone, response_format, max_length, system_prompt, extra_instructions, etc.
@@ -35,7 +34,7 @@ class RAGResult:
 class RAGHandle:
     """
     Stateless RAG processor. Knows nothing about sessions.
-    Receives a user_id + question, uses user_id to find the right
+    Receives a _user_id + question, uses _user_id to find the right
     collection/data in the vector DB, runs embed -> search -> LLM.
     """
  
@@ -62,24 +61,24 @@ class RAGHandle:
         self.llm_model = llm_model
         self.llm_api_key = llm_api_key
  
-    def _resolve_user_context(self, user_id: str) -> tuple[str, dict | None]:
+    def _resolve_user_context(self, _user_id: str) -> tuple[str, dict | None]:
         """
-        Given a user_id, decide which collection to search
+        Given a _user_id, decide which collection to search
         and which filters to apply.
  
         Options (pick what fits your data model):
-          A) One collection per user:  collection = f"user_{user_id}"
-          B) Shared collection, filter by user_id in payload
+          A) One collection per user:  collection = f"user_{_user_id}"
+          B) Shared collection, filter by _user_id in payload
           C) Lookup in a DB to find the user's config
         """
  
         # Option A: separate collection per user
-        # collection = f"user_{user_id}"
+        # collection = f"user_{_user_id}"
         # filters = None
  
-        # Option B: shared collection with user_id filter (recommended)
+        # Option B: shared collection with _user_id filter (recommended)
         collection = self.default_collection
-        filters = {"user_id": user_id}
+        filters = {"_user_id": _user_id}
  
         return collection, filters
 
@@ -96,7 +95,6 @@ class RAGHandle:
         filters: dict | None = None,
     ) -> list[dict]:
  
-        # Build qdrant filter from user context
         qdrant_filter = None
         if filters:
             conditions = [
@@ -227,11 +225,11 @@ class RAGHandle:
     async def process(self, query: RAGQuery) -> RAGResult:
         """
         Main entry point. Called by the RAG module.
-        Uses user_id to determine which collection / filters to use.
+        Uses _user_id to determine which collection / filters to use.
         """
 
         print(f"[RAG] Question: {query.question}")
-        collection, filters = self._resolve_user_context(query.user_id) 
+        collection, filters = self._resolve_user_context(query._user_id) 
         query_vector = self._embed(query.question)
         chunks = self._search(query_vector, collection, filters)
 
@@ -256,31 +254,23 @@ class RAGHandle:
         )
     
  
-class RAG(ModuleWithHandle):
-    """
-    Session-bound module. HuRI instantiates this when a client connects,
-    passing the user_id from the WebSocket config.
- 
-    Listens to "question" events.
-    Forwards question + user_id to the detached RAGHandle.
-    Emits "rag_response" event with the answer.
-    """
+class RAG(ModuleWithHandle, ModuleWithId):
     _handle_cls = RAGHandle
     input_type = "question"
     output_type = "rag_response"
 
     def __init__(
         self,
-        handle: handle.DeploymentHandle[RAGHandle],
-        user_id: str = "",
-        language: str = "en",
-        tone: str = "formal",
-        response_format: str = "paragraph",
-        max_length: int = 1024,
-        extra_instructions: str = "",
+        _handle=None,
+        _user_id="",
+        language="en",
+        tone="formal",
+        response_format="paragraph",
+        max_length=1024,
+        extra_instructions="",
+        **kwargs,
     ):
-        super().__init__(handle)
-        self.user_id = user_id
+        super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
         self.preferences = {
             "language": language,
             "tone": tone,
@@ -288,23 +278,24 @@ class RAG(ModuleWithHandle):
             "max_length": max_length,
             "extra_instructions": extra_instructions,
         }
- 
+
     async def process(self, data) -> Optional[Any]:
         """
         Called when a "question" event arrives through the event bus.
-        Packages user_id + question, sends to the stateless RAGHandle.
+        Packages _user_id + question, sends to the stateless RAGHandle.
         """
         question_text = data.text if hasattr(data, 'text') else str(data)
 
         query = RAGQuery(
-            user_id=self.user_id if self.user_id else "anonymous",
+            _user_id=self._user_id if self._user_id else "anonymous",
             question=question_text,
             preferences=self.preferences,
         )
  
-        result: RAGResult = await self.handle.process.remote(query)
+        result: RAGResult = await self._handle.process.remote(query)
         return result
- 
+
+
     def update_preferences(self, new_preferences: dict):
         """Client can update preferences mid-session via the event bus."""
         self.preferences.update(new_preferences)
