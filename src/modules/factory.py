@@ -63,15 +63,24 @@ class ModuleFactory:
 
 def bind_deployment_handles(
     modules: Dict[str, Type[Module]],
+    **service_handles,
 ) -> Dict[str, handle.DeploymentHandle]:
     handles: Dict[str, handle.DeploymentHandle] = {}
     for name, module_cls in modules.items():
         if not issubclass(module_cls, ModuleWithHandle):
             continue
-
+    
         if not hasattr(module_cls, "_handle_cls"):
             raise TypeError(f"{module_cls.__name__} must define _handle_cls")
+
         handle_cls = module_cls._handle_cls
-        handles[name] = handle_cls.bind()
+
+        if name == "rag" and service_handles:
+            handles[name] = handle_cls.bind(
+                ollama_handle=service_handles.get("ollama"),
+                qdrant_handle=service_handles.get("qdrant"),
+            )
+        else:
+            handles[name] = handle_cls.bind()
 
     return handles

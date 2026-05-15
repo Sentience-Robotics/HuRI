@@ -40,6 +40,8 @@ class RAGHandle:
  
     def __init__(
         self,
+        ollama_handle=None,
+        qdrant_handle=None,
         qdrant_url: str = "http://localhost:6333",
         default_collection: str = "documents",
         embedding_model: str = "BAAI/bge-large-en-v1.5",
@@ -51,15 +53,31 @@ class RAGHandle:
         score_threshold: float = 0.5,
     ):
         self.embed_model = SentenceTransformer(embedding_model)
-        self.qdrant = QdrantClient(url=qdrant_url)
         self.default_collection = default_collection
         self.top_k = top_k
         self.score_threshold = score_threshold
- 
+
         self.llm_provider = llm_provider
         self.llm_url = llm_url
         self.llm_model = llm_model
         self.llm_api_key = llm_api_key
+
+        self.ollama_handle = ollama_handle
+        self.qdrant_handle = qdrant_handle
+
+        self._qdrant_url = qdrant_url
+        self._qdrant = None
+
+
+    async def _get_qdrant(self):
+        """Connect to Qdrant on first use. Solves the async-in-init problem."""
+        if self._qdrant is None:
+            if self.qdrant_handle:
+                self._qdrant_url = await self.qdrant_handle.get_url.remote()
+            self._qdrant = QdrantClient(url=self._qdrant_url)
+            print(f"[RAGHandle] Connected to Qdrant at {self._qdrant_url}")
+        return self._qdrant
+
  
     def _resolve_user_context(self, _user_id: str) -> tuple[str, dict | None]:
         """
@@ -72,11 +90,6 @@ class RAGHandle:
           C) Lookup in a DB to find the user's config
         """
  
-        # Option A: separate collection per user
-        # collection = f"user_{_user_id}"
-        # filters = None
- 
-        # Option B: shared collection with _user_id filter (recommended)
         collection = self.default_collection
         filters = {"_user_id": _user_id}
  
@@ -87,9 +100,9 @@ class RAGHandle:
         return self.embed_model.encode(str(text), normalize_embeddings=True).tolist()
 
 
-
     def _search(
         self,
+        qdrant,
         query_vector: list[float],
         collection: str,
         filters: dict | None = None,
@@ -103,14 +116,16 @@ class RAGHandle:
             ]
             qdrant_filter = Filter(must=conditions)
 
-        results = self.qdrant.query_points(
-            collection_name=collection,
-            query=query_vector,
-            query_filter=qdrant_filter,
-            limit=self.top_k,
-            score_threshold=self.score_threshold,
-        ).points
-
+        try:
+            results = qdrant.query_points(
+                collection_name=collection,
+                query=query_vector,
+                query_filter=qdrant_filter,
+                limit=self.top_k,
+                score_threshold=self.score_threshold,
+            ).points
+        except Exception:
+            results = []
         return [
             {
                 "text": point.payload.get("text", ""),
@@ -178,6 +193,9 @@ class RAGHandle:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
+        if self.ollama_handle:
+            return await self.ollama_handle.generate.remote(messages, max_tokens)
  
         if self.llm_provider == "vllm":
             return await self._call_openai_compatible(
@@ -229,9 +247,12 @@ class RAGHandle:
         """
 
         print(f"[RAG] Question: {query.question}")
+
+        qdrant = await self._get_qdrant()
+
         collection, filters = self._resolve_user_context(query._user_id) 
         query_vector = self._embed(query.question)
-        chunks = self._search(query_vector, collection, filters)
+        chunks = self._search(qdrant, query_vector, collection, filters)
 
 
         print(f"[RAG] Found {len(chunks)} chunks")
