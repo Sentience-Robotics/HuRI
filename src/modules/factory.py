@@ -1,13 +1,15 @@
+from os import name
 from typing import Any, Dict, List, Mapping, Type
 
 from src.core.dataclasses.config import ModuleConfig
-from src.core.module import Module, ModuleWithHandle, handle
+from src.core.module import Module, ModuleWithHandle, handle, ModuleWithId
 
 
 class ModuleFactory:
     def __init__(self, handles):
         self._registry: Dict[str, Type[Module]] = {}
         self._handles = handles
+
 
     def register(self, name: str, module_cls: Type[Module]) -> None:
         if not issubclass(module_cls, Module):
@@ -19,29 +21,40 @@ class ModuleFactory:
                 )
         self._registry[name] = module_cls
 
-    def create(self, name: str, args: Mapping[str, Any] | None = None) -> Module:
+
+    def create(
+        self,
+        _user_id: str,
+        name: str,
+        args: Mapping[str, Any] | None = None
+        ) -> Module:
+
         if name not in self._registry:
             raise ValueError(f"Unknown module '{name}'")
+
         module_cls = self._registry[name]
 
-        if args is None:
-            args = {}
+        kwargs = dict(args or {})
+
         if issubclass(module_cls, ModuleWithHandle):
             if name not in self._handles:
                 raise RuntimeError(
                     f"Handles not bound for '{name}'. Check your config first."
                 )
 
-            return module_cls(handle=self._handles[name], **args)
-        return module_cls(**args)
+            kwargs["_handle"] = self._handles[name]
+
+        if issubclass(module_cls, ModuleWithId):
+            kwargs["_user_id"] = _user_id
+
+        return module_cls(**kwargs)
 
     def create_from_config(
-        self, module_configs: Dict[str, ModuleConfig]
+        self, _user_id: str, module_configs: Dict[str, ModuleConfig]
     ) -> List[Module]:
         modules: List[Module] = []
         for _, module_config in module_configs.items():
-            modules.append(self.create(module_config.name, module_config.args))
-
+            modules.append(self.create(_user_id, module_config.name, module_config.args))
         if modules == []:
             raise Exception
 

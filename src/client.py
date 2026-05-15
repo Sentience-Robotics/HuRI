@@ -23,9 +23,9 @@ def load_user_id() -> str | None:
     return None
 
 
-def save_user_id(user_id: str):
+def save_user_id(_user_id: str):
     with open(USER_ID_FILE, "w") as f:
-        f.write(user_id)
+        f.write(_user_id)
 
 def load_client_config(path: str) -> ClientConfig:
     with open(path) as f:
@@ -54,18 +54,18 @@ async def stream_audio():
         print("Connected to server")
 
         payload = asdict(config)
-        user_id = load_user_id()
-        if user_id:
-            payload["user_id"] = user_id
-            print(f"Reconnecting with user_id: {user_id}")
+        _user_id = load_user_id()
+        if _user_id:
+            payload["_user_id"] = _user_id
+            print(f"Reconnecting with _user_id: {_user_id}")
 
         await ws.send(json.dumps(payload))
 
         init_msg = json.loads(await ws.recv())
         if init_msg.get("type") == "session_init":
-            user_id = init_msg["user_id"]
-            save_user_id(user_id)
-            print(f"Session started with user_id: {user_id}")
+            _user_id = init_msg["_user_id"]
+            save_user_id(_user_id)
+            print(f"Session started with _user_id: {_user_id}")
 
         async def receive(ws: websockets.ClientConnection):
             while True:
