@@ -116,7 +116,7 @@ def ingest_chunks(
     model: SentenceTransformer,
     collection: str,
     chunks: list[str],
-    user_id: str,
+    _user_id: str,
     source: str,
     doc_type: str = "document",
 ):
@@ -131,7 +131,7 @@ def ingest_chunks(
             vector=vector,
             payload={
                 "text": chunk,
-                "user_id": user_id,
+                "_user_id": _user_id,
                 "source": source,
                 "type": doc_type,
                 "chunk_index": i,
@@ -161,7 +161,7 @@ def chunk_strat(text: str, args, model: SentenceTransformer) -> list[str]:
         return chunk_text(text, chunk_size=args.chunk_size, overlap=args.overlap)
 
 
-def cmd_pdf(args, client, model, user_id):
+def cmd_pdf(args, client, model, _user_id):
     """Ingest PDF files."""
     files = []
     for path in args.files:
@@ -192,15 +192,15 @@ def cmd_pdf(args, client, model, user_id):
         chunks = chunk_strat(text, args, model)
         count = ingest_chunks(
             client, model, args.collection, chunks,
-            user_id, source=pdf_path.name, doc_type="pdf",
+            _user_id, source=pdf_path.name, doc_type="pdf",
         )
-        print(f"  → {count} chunks ingested")
+        print(f"  -> {count} chunks ingested")
         total += count
 
     print(f"\nDone. Total: {total} chunks from {len(files)} PDF(s)")
 
 
-def cmd_text(args, client, model, user_id):
+def cmd_text(args, client, model, _user_id):
     """Ingest text files."""
     sample = model.encode("test", normalize_embeddings=True)
     ensure_collection(client, args.collection, len(sample))
@@ -222,7 +222,7 @@ def cmd_text(args, client, model, user_id):
         chunks = chunk_strat(text, args, model)
         count = ingest_chunks(
             client, model, args.collection, chunks,
-            user_id, source=p.name, doc_type="text",
+            _user_id, source=p.name, doc_type="text",
         )
         print(f"  -> {count} chunks ingested")
         total += count
@@ -230,7 +230,7 @@ def cmd_text(args, client, model, user_id):
     print(f"\nDone. Total: {total} chunks from {len(args.files)} file(s)")
 
 
-def cmd_write(args, client, model, user_id):
+def cmd_write(args, client, model, _user_id):
     """Write text interactively and ingest it."""
     title = args.title or f"note_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -261,13 +261,13 @@ def cmd_write(args, client, model, user_id):
     chunks = chunk_strat(text, args, model)
     count = ingest_chunks(
         client, model, args.collection, chunks,
-        user_id, source=title, doc_type="manual",
+        _user_id, source=title, doc_type="manual",
     )
 
     print(f"Done. Ingested {count} chunks as '{title}'")
 
 
-def cmd_list(args, client, model, user_id):
+def cmd_list(args, client, model, _user_id):
     """List what's in the database for this user."""
 
     try:
@@ -281,7 +281,7 @@ def cmd_list(args, client, model, user_id):
     results = client.scroll(
         collection_name=args.collection,
         scroll_filter=Filter(must=[
-            FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+            FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
         ]),
         limit=100,
         with_payload=True,
@@ -290,7 +290,7 @@ def cmd_list(args, client, model, user_id):
 
     points = results[0]
     if not points:
-        print(f"No documents found for user {user_id}")
+        print(f"No documents found for user {_user_id}")
         return
 
     sources = {}
@@ -301,7 +301,7 @@ def cmd_list(args, client, model, user_id):
             sources[source] = {"count": 0, "type": doc_type}
         sources[source]["count"] += 1
 
-    print(f"\nDocuments for user {user_id}:")
+    print(f"\nDocuments for user {_user_id}:")
     print(f"{'Source':<40} {'Type':<10} {'Chunks':<8}")
     print("-" * 60)
     for source, info in sorted(sources.items()):
@@ -309,7 +309,7 @@ def cmd_list(args, client, model, user_id):
     print(f"\nTotal: {len(points)} chunks across {len(sources)} sources")
 
 
-def cmd_delete(args, client, model, user_id):
+def cmd_delete(args, client, model, _user_id):
     """Delete documents by source name."""
 
     if not args.source:
@@ -317,7 +317,7 @@ def cmd_delete(args, client, model, user_id):
         return
 
     filter_conditions = [
-        FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+        FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
         FieldCondition(key="source", match=MatchValue(value=args.source)),
     ]
 
@@ -325,7 +325,7 @@ def cmd_delete(args, client, model, user_id):
         collection_name=args.collection,
         points_selector=Filter(must=filter_conditions),
     )
-    print(f"Deleted all chunks from source '{args.source}' for user {user_id}")
+    print(f"Deleted all chunks from source '{args.source}' for user {_user_id}")
 
 
 
@@ -368,8 +368,8 @@ def main():
     args = parser.parse_args()
 
     # Init
-    user_id = get_user_id(args.user_id)
-    print(f"User: {user_id}")
+    _user_id = get_user_id(args._user_id)
+    print(f"User: {_user_id}")
 
     client = QdrantClient(url=args.qdrant_url)
     model = SentenceTransformer(args.embedding_model)
@@ -382,7 +382,7 @@ def main():
         "list": cmd_list,
         "delete": cmd_delete,
     }
-    commands[args.command](args, client, model, user_id)
+    commands[args.command](args, client, model, _user_id)
 
 
 if __name__ == "__main__":
