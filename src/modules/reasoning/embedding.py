@@ -29,13 +29,13 @@ class EMB(ModuleWithHandle):
     input_type = "toembed"
     output_type = "embedded"
 
-    def __init__(self, handle: handle.DeploymentHandle[EMBHandle]):
-        super().__init__(handle)
+    def __init__(self, _handle: handle.DeploymentHandle[EMBHandle]):
+        super().__init__(_handle)
 
         self.database = ""
 
     async def process(self, data_to_embed: np.ndarray) -> Optional[Any]:
-        embedded = await self.handle.embbed.remote(data_to_embed)
+        embedded = await self._handle.embbed.remote(data_to_embed)
 
         # TODO write embedding
         return embedded
