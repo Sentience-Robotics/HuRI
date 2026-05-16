@@ -17,6 +17,7 @@ class RAGQuery:
     _user_id: str
     question: str
     preferences: dict = field(default_factory=dict)
+    history: list = field(default_factory=list)
     # preferences can include: language, tone, response_format, max_length, system_prompt, extra_instructions, etc.
  
  
@@ -141,12 +142,20 @@ class RAGHandle:
         question: str,
         chunks: list[dict],
         preferences: dict,
+        history=None,
     ) -> tuple[str, str]:
 
-        parts = [
-            "You are a robot speaking to a user. Answer based on the provided context.",
-            "If the context is insufficient, say so clearly.",
-        ]
+
+        parts = []
+
+        if history:
+            lines = [f"{m['role']}: {m['content']}" for m in history]
+            parts.append("[Recent conversation]\n" + "\n".join(lines))
+
+        parts.append(
+            "You are a robot speaking to a user. Answer based on the provided context." +
+            " If the context is insufficient, say so clearly.",
+        )
         if preferences.get("language"):
             parts.append(f"Always respond in {preferences['language']}.")
         if preferences.get("tone"):
@@ -161,9 +170,7 @@ class RAGHandle:
  
         if not chunks:
             user_prompt = (
-                "No relevant context was found.\n\n"
                 f"Question: {question}\n\n"
-                "Answer based on general knowledge."
             )
         else:
             context_parts = []
@@ -260,7 +267,7 @@ class RAGHandle:
             print(f"  - score: {c['score']:.2f} | {c['text'][:100]}...")
 
         system_prompt, user_prompt = self._build_prompt(
-            query.question, chunks, query.preferences
+            query.question, chunks, query.preferences, query.history
         )
         print(f"[RAG] System prompt: {system_prompt[:200]}...") 
         answer = await self._llm_generate(system_prompt, user_prompt, query.preferences)
@@ -273,8 +280,8 @@ class RAGHandle:
                 for c in chunks
             ],
         )
-    
- 
+   
+
 class RAG(ModuleWithHandle, ModuleWithId):
     _handle_cls = RAGHandle
     input_type = "question"
@@ -289,6 +296,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
         response_format="paragraph",
         max_length=1024,
         extra_instructions="",
+        max_history = 10,
         **kwargs,
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
@@ -299,6 +307,8 @@ class RAG(ModuleWithHandle, ModuleWithId):
             "max_length": max_length,
             "extra_instructions": extra_instructions,
         }
+        self.history = []
+        self.max_history = max_history
 
     async def process(self, data) -> Optional[Any]:
         """
@@ -311,9 +321,14 @@ class RAG(ModuleWithHandle, ModuleWithId):
             _user_id=self._user_id if self._user_id else "anonymous",
             question=question_text,
             preferences=self.preferences,
+            history=self.history if len(self.history) <= self.max_history else self.history[-self.max_history:],
         )
  
         result: RAGResult = await self._handle.process.remote(query)
+        
+        self.history.append({"role": "user", "content": question_text})
+        self.history.append({"role": "assistant", "content": result.answer})
+
         return result
 
 
