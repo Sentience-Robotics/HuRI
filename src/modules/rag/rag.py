@@ -117,8 +117,9 @@ class RAGHandle:
             ]
             qdrant_filter = Filter(must=conditions)
 
+        doc_results = []
         try:
-            results = qdrant.query_points(
+            doc_results = qdrant.query_points(
                 collection_name=collection,
                 query=query_vector,
                 query_filter=qdrant_filter,
@@ -126,14 +127,15 @@ class RAGHandle:
                 score_threshold=self.score_threshold,
             ).points
         except Exception:
-            results = []
+            pass
+
         return [
             {
                 "text": point.payload.get("text", ""),
                 "score": point.score,
                 "metadata": {k: v for k, v in point.payload.items() if k != "text"},
             }
-            for point in results
+            for point in doc_results
         ]
 
 
