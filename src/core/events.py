@@ -1,11 +1,19 @@
 import asyncio
 from collections import defaultdict
 
+from src.core.module import Module
+
 from .module import Module
 
 
-class EventGraph:
+class EventData:
+    """An event data must be derived from this class, and use @dataclass decorator.
+    Or they can be bytes."""
 
+    pass
+
+
+class EventGraph:
     def __init__(self):
 
         self.subscribers = defaultdict(list)

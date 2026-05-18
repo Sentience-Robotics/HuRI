@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from src.core.events import EventData
 from src.core.module import Module
 
 
@@ -22,5 +23,11 @@ class Sender(Module):
         self.ws: WebSocket = ws
         self.input_type = type
 
-    async def process(self, data: Any):
-        await self.ws.send_json(asdict(data))
+    async def process(self, data: EventData | bytes):
+        print(data)
+        if isinstance(data, bytes):
+            await self.ws.send_bytes(data)
+        elif isinstance(data, EventData):
+            await self.ws.send_json(asdict(data))
+        else:
+            await self.ws.send_text(data)

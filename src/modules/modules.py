@@ -1,6 +1,6 @@
 from typing import Dict, Type
 
-from src.modules.speech_to_text.record_speech import MIC
+from src.modules.speech_to_text.microphone_vad import MIC
 from src.modules.speech_to_text.speech_to_text import STT
 from src.modules.speech_to_text.text_aggregator import TAG
 

@@ -1,7 +1,37 @@
 from typing import Any, Dict, List, Mapping, Type
 
 from src.core.dataclasses.config import ModuleConfig
+from src.core.events import EventData
 from src.core.module import Module, ModuleWithHandle, handle
+
+
+class EventDataFactory:
+    def __init__(self):
+        self._registry: Dict[str, Type[EventData | bytes]] = {}
+
+    def register(self, topic: str, event_cls: Type[EventData | bytes] | None) -> None:
+        if topic in self._registry:
+            if event_cls is None or event_cls == self._registry[topic]:
+                return
+            else:
+                raise RuntimeError(
+                    f"event data mismatch: {event_cls} and {self._registry[topic]} for event {topic}"
+                )
+        if event_cls is None:
+            raise RuntimeError(f"event data is not defined for event {topic}")
+
+        self._registry[topic] = event_cls
+
+    def create(self, topic: str, data: Mapping[str, Any] | bytes) -> EventData:
+        if topic not in self._registry:
+            raise RuntimeError(f"unknown event topic {topic}")
+
+        event_cls = self._registry[topic]
+
+        if issubclass(event_cls, EventData):
+            return event_cls(**data)
+
+        return data
 
 
 class ModuleFactory:
@@ -39,7 +69,7 @@ class ModuleFactory:
         self, module_configs: Dict[str, ModuleConfig]
     ) -> List[Module]:
         modules: List[Module] = []
-        for _, module_config in module_configs.items():
+        for module_config in module_configs.values():
             modules.append(self.create(module_config.name, module_config.args))
 
         if modules == []:

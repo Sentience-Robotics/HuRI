@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -6,10 +5,7 @@ import webrtcvad
 
 from src.core.module import Module
 
-
-@dataclass
-class Voice:
-    data: Optional[np.ndarray]
+from .events import Voice
 
 
 class MIC(Module):
@@ -17,7 +13,7 @@ class MIC(Module):
 
     Detect voice and silence using WebRTC VAD.
 
-    input: chunk,
+    input: audio,
     output: voice
 
     :vad_agressiveness: from 0 (low) to 3 (high, can distord audio).
@@ -27,7 +23,7 @@ class MIC(Module):
         Can only be 0.010, 0.020 and 0.030.
     """
 
-    input_type = "chunk"
+    input_type = "audio"
     output_type = "voice"
 
     def __init__(
