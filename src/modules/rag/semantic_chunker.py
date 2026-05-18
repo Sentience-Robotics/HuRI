@@ -55,19 +55,10 @@ class SemanticChunker:
         if len(sentences) <= self.min_chunk_size:
             return [text.strip()] if text.strip() else []
 
-        # 1. Combine sentences with buffer for better embeddings
         combined = self._combine_with_buffer(sentences)
-
-        # 2. Embed all combined sentences
         embeddings = self.model.encode(combined, normalize_embeddings=True)
-
-        # 3. Calculate similarity between consecutive sentences
         similarities = self._calculate_similarities(embeddings)
-
-        # 4. Find breakpoints based on strategy
         breakpoints = self._find_breakpoints(similarities)
-
-        # 5. Group sentences into chunks
         chunks = self._create_chunks(sentences, breakpoints)
 
         return chunks
@@ -97,7 +88,6 @@ class SemanticChunker:
             ))
             start = end
 
-        # Last chunk
         if start < len(sentences):
             chunk_sentences = sentences[start:]
             chunks.append(Chunk(
@@ -109,7 +99,6 @@ class SemanticChunker:
 
         return chunks
 
-    # --- Internal methods ---
 
     def _split_sentences(self, text: str) -> list[str]:
         """Split text into sentences, respecting paragraph boundaries."""
@@ -225,7 +214,6 @@ class SemanticChunker:
                 chunks.append(chunk_text)
             start = end
 
-        # Last chunk
         if start < len(sentences):
             chunk_text = " ".join(sentences[start:]).strip()
             if chunk_text:
@@ -246,38 +234,3 @@ def create_chunker(
         model = SentenceTransformer(model_name)
     return SemanticChunker(model=model, strategy=strategy, **kwargs)
 
-
-
-if __name__ == "__main__":
-    print("Loading model...")
-    model = SentenceTransformer("BAAI/bge-large-en-v1.5")
-    chunker = SemanticChunker(model, strategy="stddev")
-
-    text = """
-    The company budget for 2026 is set at 2 million euros. This represents a 10% increase 
-    from the previous year. The finance department has approved the allocation after extensive review.
-
-    The engineering team is growing rapidly. We hired 5 new developers last quarter. 
-    The team now consists of 15 engineers and 3 designers. We plan to hire 2 more QA engineers 
-    by the end of Q2.
-
-    Our main office is relocating to Lyon in September. The new building has 3 floors 
-    and modern facilities. The move will affect approximately 50 employees. We are organizing 
-    transport for all office equipment.
-
-    The product roadmap for Q3 includes a major redesign of the dashboard. User feedback 
-    indicated that the current interface is too complex. We will conduct usability testing 
-    in July before the final release.
-    """
-
-    print("\n--- Percentile strategy (default) ---")
-    chunks = chunker.chunk(text)
-    for i, chunk in enumerate(chunks, 1):
-        print(f"\nChunk {i} ({len(chunk.split())} words):")
-        print(f"  {chunk[:150]}...")
-
-    print("\n--- Detailed output ---")
-    detailed = chunker.chunk_detailed(text)
-    for i, chunk in enumerate(detailed, 1):
-        print(f"\nChunk {i}: sentences {chunk.start_idx}-{chunk.end_idx} ({len(chunk.sentences)} sentences)")
-        print(f"  {chunk.text[:150]}...")

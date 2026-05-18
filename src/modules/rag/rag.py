@@ -203,6 +203,7 @@ class RAGHandle:
             )
         elif self.llm_provider == "ollama":
             return await self._call_ollama(messages, max_tokens)
+
         elif self.llm_provider == "api":
             return await self._call_openai_compatible(
                 f"{self.llm_url}/v1/chat/completions", messages, max_tokens, self.llm_api_key
