@@ -8,6 +8,8 @@ senders:
     args:
       sample_rate: 16000
       frame_duration: 0.030
+  text:
+    name: text
 
 modules:
   mic:
@@ -20,7 +22,7 @@ modules:
   stt:
     name: stt
     args:
-      language: "en"
+      language: en
       block_duration: ${inputs.audio.args.frame_duration}
     logging: INFO
   tag:

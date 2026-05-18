@@ -1,0 +1,12 @@
+huri_url: ws://localhost:8000/session
+
+topic_list: [question]
+
+senders:
+  text:
+    name: text
+
+modules:
+  tag:
+    name: tag
+    logging: INFO
