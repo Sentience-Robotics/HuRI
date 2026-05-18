@@ -12,6 +12,7 @@ from qdrant_client.models import VectorParams, Distance, PointStruct, Filter, Fi
 from sentence_transformers import SentenceTransformer
 from semantic_chunker import SemanticChunker
 
+USER_ID_FILE = os.path.expanduser("~/.huri_user_id")
 
 def _split_sentences(text: str) -> list[str]:
     """Simple sentence splitter."""
