@@ -13,9 +13,6 @@ from sentence_transformers import SentenceTransformer
 from semantic_chunker import SemanticChunker
 
 
-USER_ID_FILE = os.path.expanduser("~/.huri_user_id")
-
-
 def _split_sentences(text: str) -> list[str]:
     """Simple sentence splitter."""
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -82,8 +79,6 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     sys.exit(1)
 
 
-# --- User ID ---
-
 def get_user_id(provided_id: str = None) -> str:
     if provided_id:
         return provided_id
@@ -98,8 +93,6 @@ def get_user_id(provided_id: str = None) -> str:
     print(f"Generated new user_id: {new_id}")
     return new_id
 
-
-# --- Qdrant helpers ---
 
 def ensure_collection(client: QdrantClient, collection: str, vector_size: int):
     collections = [c.name for c in client.get_collections().collections]
@@ -346,35 +339,28 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # pdf
     p_pdf = subparsers.add_parser("pdf", help="Ingest PDF files")
     p_pdf.add_argument("files", nargs="+", help="PDF files or directories")
 
-    # text
     p_text = subparsers.add_parser("text", help="Ingest text files (.txt, .md)")
     p_text.add_argument("files", nargs="+", help="Text files")
 
-    # write
     p_write = subparsers.add_parser("write", help="Write text interactively")
     p_write.add_argument("--title", type=str, default=None, help="Title/source name")
 
-    # list
     p_list = subparsers.add_parser("list", help="List ingested documents")
 
-    # delete
     p_delete = subparsers.add_parser("delete", help="Delete documents by source")
     p_delete.add_argument("--source", type=str, required=True, help="Source name to delete")
 
     args = parser.parse_args()
 
-    # Init
     _user_id = get_user_id(args._user_id)
     print(f"User: {_user_id}")
 
     client = QdrantClient(url=args.qdrant_url)
     model = SentenceTransformer(args.embedding_model)
 
-    # Dispatch
     commands = {
         "pdf": cmd_pdf,
         "text": cmd_text,
