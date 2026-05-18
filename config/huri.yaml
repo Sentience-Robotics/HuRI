@@ -18,3 +18,7 @@ applications:
     runtime_env: { RAY_COLOR_PREFIX=1 }
     deployments:
       - name: HuRI
+      - name: RAGHandle
+        num_replicas: 2
+      - name: OllamaService
+      - name: QdrantService
