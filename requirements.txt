@@ -17,3 +17,4 @@ faster-whisper
 sounddevice
 websockets
 omegaconf
+prompt-toolkit

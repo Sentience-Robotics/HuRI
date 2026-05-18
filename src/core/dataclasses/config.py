@@ -16,15 +16,31 @@ class ModuleConfig:
 
 
 @dataclass
+class ClientSenderConfig:
+    name: str
+    args: Mapping[str, Any]
+
+    @classmethod
+    def from_dict(self, raw: dict) -> "ClientSenderConfig":
+        return self(
+            name=raw["name"],
+            args=raw.get("args", {}),
+        )
+
+
+@dataclass
 class ClientConfig:
     huri_url: str
     topic_list: List[str]
-    sample_rate: float
-    frame_duration: float
+    senders: Dict[str, ClientSenderConfig]
     modules: Dict[str, ModuleConfig]
 
     @classmethod
     def from_dict(cls, raw: Dict) -> "ClientConfig":
+        senders = {
+            sender_id: ClientSenderConfig.from_dict(mod_raw)
+            for sender_id, mod_raw in raw.get("senders", {}).items()
+        }
         modules = {
             module_id: ModuleConfig.from_dict(mod_raw)
             for module_id, mod_raw in raw.get("modules", {}).items()
@@ -32,7 +48,6 @@ class ClientConfig:
         return cls(
             huri_url=raw["huri_url"],
             topic_list=raw["topic_list"],
-            sample_rate=raw["sample_rate"],
-            frame_duration=raw["frame_duration"],
+            senders=senders,
             modules=modules,
         )

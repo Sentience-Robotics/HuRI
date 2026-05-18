@@ -9,6 +9,7 @@ import sounddevice as sd
 import websockets
 from omegaconf import OmegaConf
 
+from src.core.client import Client
 from src.core.dataclasses.config import ClientConfig
 
 
@@ -23,7 +24,7 @@ def load_client_config(path: str) -> ClientConfig:
         return ClientConfig.from_dict(raw_resolved)
 
 
-async def stream_audio():
+async def launch_client():
     parser = argparse.ArgumentParser(description="Client config")
     parser.add_argument(
         "--config",
@@ -34,38 +35,8 @@ async def stream_audio():
     args = parser.parse_args()
     config = load_client_config(args.config)
 
-    FRAME_SIZE = int(config.sample_rate * config.frame_duration)
-    async with websockets.connect(config.huri_url) as ws:
-        print("Connected to server")
-
-        await ws.send(json.dumps(asdict(config)))
-
-        async def receive(ws: websockets.ClientConnection):
-            while True:
-                text = await ws.recv()
-                print("received:", text)
-
-        async def send(ws: websockets.ClientConnection):
-            loop = asyncio.get_running_loop()
-
-            queue: asyncio.Queue = asyncio.Queue()
-
-            def callback(indata: np.ndarray, frames, time, status):
-                loop.call_soon_threadsafe(queue.put_nowait, indata.copy())
-
-            with sd.InputStream(
-                samplerate=config.sample_rate,
-                channels=1,
-                dtype="int16",
-                callback=callback,
-                blocksize=FRAME_SIZE,
-            ):
-                while True:
-                    chunk = await queue.get()
-                    await ws.send(chunk.tobytes())
-
-        await asyncio.gather(receive(ws), send(ws))
+    await Client(config=config).run()
 
 
 if __name__ == "__main__":
-    asyncio.run(stream_audio())
+    asyncio.run(launch_client())
