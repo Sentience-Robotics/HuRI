@@ -31,14 +31,14 @@ class Client:
         async with websockets.connect(self.config.huri_url) as ws:
             print("Connected to server")
 
-            inputs: List[ClientSender] = [
+            senders: List[ClientSender] = [
                 self.senders_dict[config.name](ws=ws, **config.args)
-                for config in self.config.inputs.values()
+                for config in self.config.senders.values()
             ]
 
             await ws.send(json.dumps(asdict(self.config)))
 
             await asyncio.gather(
-                *(inp.input_loop() for inp in inputs),
+                *(sender.input_loop() for sender in senders),
                 self._receive_loop(ws),
             )

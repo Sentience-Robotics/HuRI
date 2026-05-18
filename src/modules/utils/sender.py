@@ -1,5 +1,4 @@
 from dataclasses import asdict
-from typing import Any
 
 from fastapi import WebSocket
 
@@ -15,7 +14,6 @@ class Sender(Module):
 
     input: auto, output: None"""
 
-    input_type = None
     output_type = None
 
     def __init__(self, ws: WebSocket, type: str):

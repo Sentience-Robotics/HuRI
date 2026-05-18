@@ -1,12 +1,7 @@
 import argparse
 import asyncio
-import json
-from dataclasses import asdict
 from typing import Dict
 
-import numpy as np
-import sounddevice as sd
-import websockets
 from omegaconf import OmegaConf
 
 from src.core.client import Client

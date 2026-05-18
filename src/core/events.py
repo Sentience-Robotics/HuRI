@@ -1,11 +1,11 @@
 import asyncio
 from collections import defaultdict
-
-from src.core.module import Module
+from dataclasses import dataclass
 
 from .module import Module
 
 
+@dataclass
 class EventData:
     """An event data must be derived from this class, and use @dataclass decorator.
     Or they can be bytes."""

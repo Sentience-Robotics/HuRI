@@ -14,24 +14,31 @@ class EventDataFactory:
             if event_cls is None or event_cls == self._registry[topic]:
                 return
             else:
-                raise RuntimeError(
-                    f"event data mismatch: {event_cls} and {self._registry[topic]} for event {topic}"
-                )
+                raise RuntimeError(f"event data mismatch: \
+{event_cls} and {self._registry[topic]} for event {topic}")
         if event_cls is None:
             raise RuntimeError(f"event data is not defined for event {topic}")
 
         self._registry[topic] = event_cls
 
-    def create(self, topic: str, data: Mapping[str, Any] | bytes) -> EventData:
+    def create(self, topic: str, data: Mapping[str, Any] | bytes) -> EventData | bytes:
         if topic not in self._registry:
             raise RuntimeError(f"unknown event topic {topic}")
 
         event_cls = self._registry[topic]
+        if isinstance(data, bytes):
+            if isinstance(event_cls, bytes):
+                return data
+            else:
+                raise RuntimeError(f"mismatched event data type: \
+{event_cls} is not bytes but should be.")
 
-        if issubclass(event_cls, EventData):
-            return event_cls(**data)
-
-        return data
+        else:
+            if isinstance(event_cls, EventData):
+                return event_cls(**data)
+            else:
+                raise RuntimeError(f"mismatched event data type: \
+{event_cls} is not EventData but should be.")
 
 
 class ModuleFactory:

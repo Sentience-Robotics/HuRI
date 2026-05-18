@@ -4,7 +4,7 @@ from ray.serve import handle
 
 
 class Module:
-    input_type: Optional[str]
+    input_type: str
     output_type: Optional[str]
 
     async def process(self, _) -> Optional[Any]:

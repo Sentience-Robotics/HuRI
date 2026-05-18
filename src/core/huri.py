@@ -1,7 +1,7 @@
 import json
 import struct
 import uuid
-from typing import Any, Dict, List, Tuple, Type
+from typing import Dict, List, Type
 
 from fastapi import WebSocket, WebSocketDisconnect
 from ray import serve
@@ -31,6 +31,8 @@ class HuRI:
 
             event_cls = events.pop(module_cls.input_type, None)
             self.event_factory.register(module_cls.input_type, event_cls)
+            if module_cls.output_type is None:
+                continue
             event_cls = events.pop(module_cls.output_type, None)
             self.event_factory.register(module_cls.output_type, event_cls)
 
@@ -82,6 +84,6 @@ class HuRI:
                     await session.publish(topic, data)
 
             except (WebSocketDisconnect, RuntimeError):
-                print(f"Client disconnected")
+                print(f"Client disconnected: {session_id}")
 
         await receive_loop(self.clients[session_id], ws)

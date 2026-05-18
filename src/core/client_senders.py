@@ -1,18 +1,15 @@
-import argparse
 import asyncio
 import json
 import struct
-from dataclasses import asdict, dataclass, is_dataclass
-from typing import Any, Dict, List, Optional, Type
+from dataclasses import asdict
+from typing import Dict, Type
 
 import numpy as np
 import sounddevice as sd
 import websockets
-from omegaconf import OmegaConf
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 
-from src.core.dataclasses.config import ClientConfig
 from src.core.events import EventData
 from src.modules.speech_to_text.events import Sentence
 
@@ -20,9 +17,11 @@ from src.modules.speech_to_text.events import Sentence
 class ClientSender:
     """This class abstract sending data to HuRI.
 
-    output_type: is the topic that the ClientSender will send. Data structure must match event topic.
+    output_type: is the topic that the ClientSender will send.
+    Data structure must match event topic.
 
-    Class derived from ClientSender must implement input_loop, and use ClientSender.send to send data to HuRI. It can be EventData or bytes
+    Class derived from ClientSender must implement input_loop,
+    and use ClientSender.send to send data to HuRI. It can be EventData or bytes
     """
 
     output_type: str
@@ -34,6 +33,7 @@ class ClientSender:
         raise NotImplementedError
 
     async def send(self, topic: str, data: EventData | bytes):
+        packet: str | bytes
         if isinstance(data, EventData):
             packet = json.dumps({"topic": topic, "data": asdict(data)})
         else:
@@ -82,7 +82,7 @@ class TextSender(ClientSender):
         super().__init__(**kwargs)
 
     async def input_loop(self):
-        session = PromptSession()
+        session: PromptSession = PromptSession()
         while True:
             with patch_stdout():
                 text = await session.prompt_async(">> ")
