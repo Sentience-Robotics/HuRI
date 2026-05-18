@@ -1,6 +1,5 @@
 import re
 import argparse
-import os
 import sys
 import uuid
 from pathlib import Path
@@ -10,10 +9,9 @@ from pypdf import PdfReader
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue
 from sentence_transformers import SentenceTransformer
-from semantic_chunker import SemanticChunker
 
-
-USER_ID_FILE = os.path.expanduser("~/.huri_user_id")
+from src.modules.rag.semantic_chunker import SemanticChunker
+from src.core.user_config import get_or_create_user_id
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -82,25 +80,6 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     sys.exit(1)
 
 
-# --- User ID ---
-
-def get_user_id(provided_id: str = None) -> str:
-    if provided_id:
-        return provided_id
-    if os.path.exists(USER_ID_FILE):
-        with open(USER_ID_FILE) as f:
-            uid = f.read().strip()
-            if uid:
-                return uid
-    new_id = str(uuid.uuid4())
-    with open(USER_ID_FILE, "w") as f:
-        f.write(new_id)
-    print(f"Generated new user_id: {new_id}")
-    return new_id
-
-
-# --- Qdrant helpers ---
-
 def ensure_collection(client: QdrantClient, collection: str, vector_size: int):
     collections = [c.name for c in client.get_collections().collections]
     if collection not in collections:
@@ -140,7 +119,6 @@ def ingest_chunks(
         ))
 
     if points:
-        # Upsert in batches of 100
         batch_size = 100
         for i in range(0, len(points), batch_size):
             batch = points[i:i + batch_size]
@@ -368,7 +346,7 @@ def main():
     args = parser.parse_args()
 
     # Init
-    _user_id = get_user_id(args._user_id)
+    _user_id = get_or_create_user_id()
     print(f"User: {_user_id}")
 
     client = QdrantClient(url=args.qdrant_url)
