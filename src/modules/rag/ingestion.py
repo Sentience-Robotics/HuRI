@@ -386,7 +386,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Init
     _user_id = get_or_create_user_id()
     print(f"User: {_user_id}")
 
