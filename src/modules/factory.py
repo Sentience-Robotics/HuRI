@@ -1,15 +1,13 @@
-from os import name
 from typing import Any, Dict, List, Mapping, Type
 
 from src.core.dataclasses.config import ModuleConfig
-from src.core.module import Module, ModuleWithHandle, handle, ModuleWithId
+from src.core.module import Module, ModuleWithHandle, ModuleWithId, handle
 
 
 class ModuleFactory:
     def __init__(self, handles):
         self._registry: Dict[str, Type[Module]] = {}
         self._handles = handles
-
 
     def register(self, name: str, module_cls: Type[Module]) -> None:
         if not issubclass(module_cls, Module):
@@ -21,13 +19,9 @@ class ModuleFactory:
                 )
         self._registry[name] = module_cls
 
-
     def create(
-        self,
-        _user_id: str,
-        name: str,
-        args: Mapping[str, Any] | None = None
-        ) -> Module:
+        self, _user_id: str, name: str, args: Mapping[str, Any] | None = None
+    ) -> Module:
 
         if name not in self._registry:
             raise ValueError(f"Unknown module '{name}'")
@@ -54,7 +48,9 @@ class ModuleFactory:
     ) -> List[Module]:
         modules: List[Module] = []
         for _, module_config in module_configs.items():
-            modules.append(self.create(_user_id, module_config.name, module_config.args))
+            modules.append(
+                self.create(_user_id, module_config.name, module_config.args)
+            )
         if modules == []:
             raise Exception
 
@@ -69,7 +65,7 @@ def bind_deployment_handles(
     for name, module_cls in modules.items():
         if not issubclass(module_cls, ModuleWithHandle):
             continue
-    
+
         if not hasattr(module_cls, "_handle_cls"):
             raise TypeError(f"{module_cls.__name__} must define _handle_cls")
 

@@ -1,7 +1,6 @@
 import os
-import uuid
 import platform
-
+import uuid
 from pathlib import Path
 
 
@@ -10,10 +9,10 @@ def get_config_dir() -> Path:
     system = platform.system()
 
     if system == "Windows":
-        #TODO: To be tested -> also consider language-specific if needed
+        # TODO: To be tested -> also consider language-specific if needed
         base = os.environ.get("APPDATA", os.path.expanduser("~/AppData/Roaming"))
     elif system == "Darwin":
-        #TODO: To be tested -> also consider language-specific if needed
+        # TODO: To be tested -> also consider language-specific if needed
         base = os.path.expanduser("~/Library/Application Support")
     else:
         base = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))

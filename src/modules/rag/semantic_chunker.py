@@ -14,8 +14,9 @@ Usage:
 """
 
 import re
-import numpy as np
 from dataclasses import dataclass, field
+
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
 
@@ -31,13 +32,13 @@ class SemanticChunker:
     def __init__(
         self,
         model: SentenceTransformer,
-        strategy: str = "percentile",     # "percentile", "threshold", "stddev"
-        percentile_cutoff: float = 25,    # for percentile strategy
-        threshold_cutoff: float = 0.5,    # for threshold strategy
-        stddev_cutoff: float = 1.0,       # for stddev strategy (N std devs below mean)
-        min_chunk_size: int = 2,          # minimum sentences per chunk
-        max_chunk_size: int = 50,         # maximum sentences per chunk
-        buffer_size: int = 1,             # sentences to look around for context
+        strategy: str = "percentile",  # "percentile", "threshold", "stddev"
+        percentile_cutoff: float = 25,  # for percentile strategy
+        threshold_cutoff: float = 0.5,  # for threshold strategy
+        stddev_cutoff: float = 1.0,  # for stddev strategy (N std devs below mean)
+        min_chunk_size: int = 2,  # minimum sentences per chunk
+        max_chunk_size: int = 50,  # maximum sentences per chunk
+        buffer_size: int = 1,  # sentences to look around for context
     ):
         self.model = model
         self.strategy = strategy
@@ -55,19 +56,10 @@ class SemanticChunker:
         if len(sentences) <= self.min_chunk_size:
             return [text.strip()] if text.strip() else []
 
-        # 1. Combine sentences with buffer for better embeddings
         combined = self._combine_with_buffer(sentences)
-
-        # 2. Embed all combined sentences
         embeddings = self.model.encode(combined, normalize_embeddings=True)
-
-        # 3. Calculate similarity between consecutive sentences
-        similarities = self._calculate_similarities(embeddings)
-
-        # 4. Find breakpoints based on strategy
+        similarities = self._calculate_similarities(embeddings.numpy())
         breakpoints = self._find_breakpoints(similarities)
-
-        # 5. Group sentences into chunks
         chunks = self._create_chunks(sentences, breakpoints)
 
         return chunks
@@ -77,11 +69,18 @@ class SemanticChunker:
         sentences = self._split_sentences(text)
 
         if len(sentences) <= self.min_chunk_size:
-            return [Chunk(text=text.strip(), sentences=sentences, start_idx=0, end_idx=len(sentences))]
+            return [
+                Chunk(
+                    text=text.strip(),
+                    sentences=sentences,
+                    start_idx=0,
+                    end_idx=len(sentences),
+                )
+            ]
 
         combined = self._combine_with_buffer(sentences)
         embeddings = self.model.encode(combined, normalize_embeddings=True)
-        similarities = self._calculate_similarities(embeddings)
+        similarities = self._calculate_similarities(embeddings.numpy())
         breakpoints = self._find_breakpoints(similarities)
 
         chunks = []
@@ -89,27 +88,28 @@ class SemanticChunker:
         for bp in breakpoints:
             end = bp + 1
             chunk_sentences = sentences[start:end]
-            chunks.append(Chunk(
-                text=" ".join(chunk_sentences),
-                sentences=chunk_sentences,
-                start_idx=start,
-                end_idx=end,
-            ))
+            chunks.append(
+                Chunk(
+                    text=" ".join(chunk_sentences),
+                    sentences=chunk_sentences,
+                    start_idx=start,
+                    end_idx=end,
+                )
+            )
             start = end
 
-        # Last chunk
         if start < len(sentences):
             chunk_sentences = sentences[start:]
-            chunks.append(Chunk(
-                text=" ".join(chunk_sentences),
-                sentences=chunk_sentences,
-                start_idx=start,
-                end_idx=len(sentences),
-            ))
+            chunks.append(
+                Chunk(
+                    text=" ".join(chunk_sentences),
+                    sentences=chunk_sentences,
+                    start_idx=start,
+                    end_idx=len(sentences),
+                )
+            )
 
         return chunks
-
-    # --- Internal methods ---
 
     def _split_sentences(self, text: str) -> list[str]:
         """Split text into sentences, respecting paragraph boundaries."""
@@ -119,7 +119,7 @@ class SemanticChunker:
             para = para.strip()
             if not para:
                 continue
-            parts = re.split(r'(?<=[.!?])\s+', para)
+            parts = re.split(r"(?<=[.!?])\s+", para)
             for part in parts:
                 part = part.strip()
                 if part:
@@ -160,7 +160,9 @@ class SemanticChunker:
             candidate_indices = [i for i, s in enumerate(similarities) if s < cutoff]
 
         elif self.strategy == "threshold":
-            candidate_indices = [i for i, s in enumerate(similarities) if s < self.threshold_cutoff]
+            candidate_indices = [
+                i for i, s in enumerate(similarities) if s < self.threshold_cutoff
+            ]
 
         elif self.strategy == "stddev":
             mean = np.mean(sims)
@@ -171,11 +173,15 @@ class SemanticChunker:
         else:
             raise ValueError(f"Unknown strategy: {self.strategy}")
 
-        breakpoints = self._enforce_chunk_sizes(candidate_indices, len(similarities) + 1)
+        breakpoints = self._enforce_chunk_sizes(
+            candidate_indices, len(similarities) + 1
+        )
 
         return breakpoints
 
-    def _enforce_chunk_sizes(self, candidates: list[int], num_sentences: int) -> list[int]:
+    def _enforce_chunk_sizes(
+        self, candidates: list[int], num_sentences: int
+    ) -> list[int]:
         """Ensure chunks respect min and max size constraints."""
         if not candidates:
             breakpoints = []
@@ -225,7 +231,6 @@ class SemanticChunker:
                 chunks.append(chunk_text)
             start = end
 
-        # Last chunk
         if start < len(sentences):
             chunk_text = " ".join(sentences[start:]).strip()
             if chunk_text:
@@ -234,9 +239,8 @@ class SemanticChunker:
         return chunks
 
 
-
 def create_chunker(
-    model: SentenceTransformer = None,
+    model: SentenceTransformer | None = None,
     model_name: str = "BAAI/bge-large-en-v1.5",
     strategy: str = "percentile",
     **kwargs,
@@ -245,39 +249,3 @@ def create_chunker(
     if model is None:
         model = SentenceTransformer(model_name)
     return SemanticChunker(model=model, strategy=strategy, **kwargs)
-
-
-
-if __name__ == "__main__":
-    print("Loading model...")
-    model = SentenceTransformer("BAAI/bge-large-en-v1.5")
-    chunker = SemanticChunker(model, strategy="stddev")
-
-    text = """
-    The company budget for 2026 is set at 2 million euros. This represents a 10% increase 
-    from the previous year. The finance department has approved the allocation after extensive review.
-
-    The engineering team is growing rapidly. We hired 5 new developers last quarter. 
-    The team now consists of 15 engineers and 3 designers. We plan to hire 2 more QA engineers 
-    by the end of Q2.
-
-    Our main office is relocating to Lyon in September. The new building has 3 floors 
-    and modern facilities. The move will affect approximately 50 employees. We are organizing 
-    transport for all office equipment.
-
-    The product roadmap for Q3 includes a major redesign of the dashboard. User feedback 
-    indicated that the current interface is too complex. We will conduct usability testing 
-    in July before the final release.
-    """
-
-    print("\n--- Percentile strategy (default) ---")
-    chunks = chunker.chunk(text)
-    for i, chunk in enumerate(chunks, 1):
-        print(f"\nChunk {i} ({len(chunk.split())} words):")
-        print(f"  {chunk[:150]}...")
-
-    print("\n--- Detailed output ---")
-    detailed = chunker.chunk_detailed(text)
-    for i, chunk in enumerate(detailed, 1):
-        print(f"\nChunk {i}: sentences {chunk.start_idx}-{chunk.end_idx} ({len(chunk.sentences)} sentences)")
-        print(f"  {chunk.text[:150]}...")

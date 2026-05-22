@@ -1,33 +1,34 @@
-from typing import Any, Optional
 from dataclasses import dataclass, field
- 
-from ray import serve
-from src.core.module import ModuleWithHandle, ModuleWithId, handle
-from qdrant_client.models import Filter, FieldCondition, MatchValue
-from sentence_transformers import SentenceTransformer
-from qdrant_client import QdrantClient
- 
- 
+from typing import Any, Optional
+
 import httpx
- 
-  
+from qdrant_client import QdrantClient
+from qdrant_client.models import FieldCondition, Filter, MatchValue
+from ray import serve
+from sentence_transformers import SentenceTransformer
+
+from src.core.module import ModuleWithHandle, ModuleWithId
+
+
 @dataclass
 class RAGQuery:
     """What flows from RAG module to RAGHandle."""
+
     _user_id: str
     question: str
     preferences: dict = field(default_factory=dict)
-    history: list = field(default_factory=list)
-    # preferences can include: language, tone, response_format, max_length, system_prompt, extra_instructions, etc.
- 
- 
+    # preferences can include: language, tone,
+    # response_format, max_length, system_prompt, extra_instructions, etc.
+
+
 @dataclass
 class RAGResult:
     """What RAGHandle returns."""
+
     answer: str
     sources: list[dict] = field(default_factory=list)
- 
- 
+
+
 @serve.deployment(
     num_replicas=2,
     ray_actor_options={"num_cpus": 1},
@@ -38,7 +39,7 @@ class RAGHandle:
     Receives a _user_id + question, uses _user_id to find the right
     collection/data in the vector DB, runs embed -> search -> LLM.
     """
- 
+
     def __init__(
         self,
         ollama_handle=None,
@@ -46,7 +47,7 @@ class RAGHandle:
         qdrant_url: str = "http://localhost:6333",
         default_collection: str = "documents",
         embedding_model: str = "BAAI/bge-large-en-v1.5",
-        llm_provider: str = "ollama", # "vllm", "ollama", "api"
+        llm_provider: str = "ollama",  # "vllm", "ollama", "api"
         llm_url: str = "http://localhost:11434",
         llm_model: str = "mistral:7b",
         llm_api_key: str = "",
@@ -67,8 +68,7 @@ class RAGHandle:
         self.qdrant_handle = qdrant_handle
 
         self._qdrant_url = qdrant_url
-        self._qdrant = None
-
+        self._qdrant: QdrantClient | None = None
 
     async def _get_qdrant(self):
         """Connect to Qdrant on first use. Solves the async-in-init problem."""
@@ -79,27 +79,24 @@ class RAGHandle:
             print(f"[RAGHandle] Connected to Qdrant at {self._qdrant_url}")
         return self._qdrant
 
- 
     def _resolve_user_context(self, _user_id: str) -> tuple[str, dict | None]:
         """
         Given a _user_id, decide which collection to search
         and which filters to apply.
- 
+
         Options (pick what fits your data model):
           A) One collection per user:  collection = f"user_{_user_id}"
           B) Shared collection, filter by _user_id in payload
           C) Lookup in a DB to find the user's config
         """
- 
+
         collection = self.default_collection
         filters = {"_user_id": _user_id}
- 
+
         return collection, filters
 
-
-    def _embed(self, text) -> list[float]:
+    def _embed(self, text) -> list[float] | Any:
         return self.embed_model.encode(str(text), normalize_embeddings=True).tolist()
-
 
     def _search(
         self,
@@ -108,10 +105,10 @@ class RAGHandle:
         collection: str,
         filters: dict | None = None,
     ) -> list[dict]:
- 
-        qdrant_filter = None
+
+        qdrant_filter: Any = None
         if filters:
-            conditions = [
+            conditions: Any = [
                 FieldCondition(key=k, match=MatchValue(value=v))
                 for k, v in filters.items()
             ]
@@ -138,7 +135,6 @@ class RAGHandle:
             for point in doc_results
         ]
 
-
     def _build_prompt(
         self,
         question: str,
@@ -147,7 +143,6 @@ class RAGHandle:
         history=None,
     ) -> tuple[str, str]:
 
-
         parts = []
 
         if history:
@@ -155,8 +150,8 @@ class RAGHandle:
             parts.append("[Recent conversation]\n" + "\n".join(lines))
 
         parts.append(
-            "You are a robot speaking to a user. Answer based on the provided context." +
-            " If the context is insufficient, say so clearly.",
+            "You are a robot speaking to a user. Answer based on the provided context."
+            + " If the context is insufficient, say so clearly.",
         )
         if preferences.get("language"):
             parts.append(f"Always respond in {preferences['language']}.")
@@ -169,34 +164,31 @@ class RAGHandle:
         if preferences.get("extra_instructions"):
             parts.append(preferences["extra_instructions"])
         system_prompt = " ".join(parts)
- 
+
         if not chunks:
-            user_prompt = (
-                f"Question: {question}\n\n"
-            )
+            user_prompt = f"Question: {question}\n\n"
         else:
             context_parts = []
             for i, chunk in enumerate(chunks, 1):
                 source = chunk["metadata"].get("source", "unknown")
-                context_parts.append(
-                    f"[{i}] (source: {source}, score: {chunk['score']:.2f})\n{chunk['text']}"
-                )
+                context_parts.append(f"[{i}] (source: {source}, score: \
+{chunk['score']:.2f})\n{chunk['text']}")
             context_block = "\n\n".join(context_parts)
             user_prompt = (
                 f"Context:\n{context_block}\n\n"
                 f"Question: {question}\n\n"
-                "Answer based on the context above. Don't speak about the sources, just use them to answer the question."
+                "Answer based on the context above.\
+Don't speak about the sources, just use them to answer the question."
             )
- 
-        return system_prompt, user_prompt
 
+        return system_prompt, user_prompt
 
     async def _llm_generate(
         self,
         system_prompt: str,
         user_prompt: str,
         preferences: dict,
-    ) -> str:
+    ) -> Any:
         max_tokens = preferences.get("max_length", 1024)
         messages = [
             {"role": "system", "content": system_prompt},
@@ -205,50 +197,58 @@ class RAGHandle:
 
         if self.ollama_handle:
             return await self.ollama_handle.generate.remote(messages, max_tokens)
- 
+
         if self.llm_provider == "vllm":
             return await self._call_openai_compatible(
                 f"{self.llm_url}/v1/chat/completions", messages, max_tokens
             )
         elif self.llm_provider == "ollama":
             return await self._call_ollama(messages, max_tokens)
+
         elif self.llm_provider == "api":
             return await self._call_openai_compatible(
-                f"{self.llm_url}/v1/chat/completions", messages, max_tokens, self.llm_api_key
+                f"{self.llm_url}/v1/chat/completions",
+                messages,
+                max_tokens,
+                self.llm_api_key,
             )
         else:
             raise ValueError(f"Unknown llm_provider: {self.llm_provider}")
 
-
     async def _call_openai_compatible(
         self, url: str, messages: list, max_tokens: int, api_key: str = ""
-    ) -> str:
+    ) -> Any:
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, json={
-                "model": self.llm_model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.1,
-            })
+            resp = await client.post(
+                url,
+                headers=headers,
+                json={
+                    "model": self.llm_model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": 0.1,
+                },
+            )
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
 
-
-    async def _call_ollama(self, messages: list, max_tokens: int) -> str:
+    async def _call_ollama(self, messages: list, max_tokens: int) -> Any:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(f"{self.llm_url}/api/chat", json={
-                "model": self.llm_model,
-                "messages": messages,
-                "stream": False,
-                "options": {"num_predict": max_tokens, "temperature": 0.1},
-            })
+            resp = await client.post(
+                f"{self.llm_url}/api/chat",
+                json={
+                    "model": self.llm_model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {"num_predict": max_tokens, "temperature": 0.1},
+                },
+            )
             resp.raise_for_status()
             return resp.json()["message"]["content"]
 
- 
     async def process(self, query: RAGQuery) -> RAGResult:
         """
         Main entry point. Called by the RAG module.
@@ -259,10 +259,9 @@ class RAGHandle:
 
         qdrant = await self._get_qdrant()
 
-        collection, filters = self._resolve_user_context(query._user_id) 
+        collection, filters = self._resolve_user_context(query._user_id)
         query_vector = self._embed(query.question)
         chunks = self._search(qdrant, query_vector, collection, filters)
-
 
         print(f"[RAG] Found {len(chunks)} chunks")
         for c in chunks:
@@ -271,7 +270,7 @@ class RAGHandle:
         system_prompt, user_prompt = self._build_prompt(
             query.question, chunks, query.preferences, query.history
         )
-        print(f"[RAG] System prompt: {system_prompt[:200]}...") 
+        print(f"[RAG] System prompt: {system_prompt[:200]}...")
         answer = await self._llm_generate(system_prompt, user_prompt, query.preferences)
         print(f"[RAG] Answer: {answer}")
 
@@ -282,7 +281,7 @@ class RAGHandle:
                 for c in chunks
             ],
         )
-   
+
 
 class RAG(ModuleWithHandle, ModuleWithId):
     _handle_cls = RAGHandle
@@ -298,7 +297,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
         response_format="paragraph",
         max_length=1024,
         extra_instructions="",
-        max_history = 10,
+        max_history=10,
         **kwargs,
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
@@ -317,22 +316,28 @@ class RAG(ModuleWithHandle, ModuleWithId):
         Called when a "question" event arrives through the event bus.
         Packages _user_id + question, sends to the stateless RAGHandle.
         """
-        question_text = data.text if hasattr(data, 'text') else str(data)
+        question_text = data.text if hasattr(data, "text") else str(data)
 
         query = RAGQuery(
             _user_id=self._user_id if self._user_id else "anonymous",
             question=question_text,
             preferences=self.preferences,
-            history=self.history if len(self.history) <= self.max_history else self.history[-self.max_history:],
+            history=(
+                self.history
+                if len(self.history) <= self.max_history
+                else self.history[-self.max_history :]
+            ),
         )
- 
+
         result: RAGResult = await self._handle.process.remote(query)
-        
+
         self.history.append({"role": "user", "content": question_text})
         self.history.append({"role": "assistant", "content": result.answer})
 
+        result: RAGResult | Any = None
+        if self._handle is not None:
+            result = await self._handle.process.remote(query)
         return result
-
 
     def update_preferences(self, new_preferences: dict):
         """Client can update preferences mid-session via the event bus."""

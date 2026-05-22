@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import json
-import os
 from dataclasses import asdict
 from typing import Dict
 

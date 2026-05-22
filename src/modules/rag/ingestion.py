@@ -1,24 +1,32 @@
-import re
 import argparse
+import re
 import sys
 import uuid
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Any, List
 
 from pypdf import PdfReader
 from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 from sentence_transformers import SentenceTransformer
 
-from src.modules.rag.semantic_chunker import SemanticChunker
 from src.core.user_config import get_or_create_user_id
+from src.modules.rag.semantic_chunker import SemanticChunker
 
 
 def _split_sentences(text: str) -> list[str]:
     """Simple sentence splitter."""
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    
-    result = []
+    result: List = []
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+
     for s in sentences:
         parts = s.split("\n\n")
         result.extend(parts)
@@ -30,10 +38,10 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
     Fallback: fixed-size chunking by sentences.
     Used when --chunking=fixed.
     """
+    chunks: List = []
+    current_chunk: List = []
+    current_length: int = 0
     sentences = _split_sentences(text)
-    chunks = []
-    current_chunk = []
-    current_length = 0
 
     for sentence in sentences:
         sentence = sentence.strip()
@@ -43,10 +51,10 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
         sentence_length = len(sentence.split())
 
         if current_length + sentence_length > chunk_size and current_chunk:
+            overlap_words: int = 0
+            overlap_sentences: List = []
             chunks.append(" ".join(current_chunk))
 
-            overlap_words = 0
-            overlap_sentences = []
             for s in reversed(current_chunk):
                 overlap_words += len(s.split())
                 overlap_sentences.insert(0, s)
@@ -105,29 +113,31 @@ def ingest_chunks(
 
     for i, chunk in enumerate(chunks):
         vector = model.encode(chunk, normalize_embeddings=True).tolist()
-        points.append(PointStruct(
-            id=str(uuid.uuid4()),
-            vector=vector,
-            payload={
-                "text": chunk,
-                "_user_id": _user_id,
-                "source": source,
-                "type": doc_type,
-                "chunk_index": i,
-                "timestamp": timestamp,
-            },
-        ))
+        points.append(
+            PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={
+                    "text": chunk,
+                    "_user_id": _user_id,
+                    "source": source,
+                    "type": doc_type,
+                    "chunk_index": i,
+                    "timestamp": timestamp,
+                },
+            )
+        )
 
     if points:
         batch_size = 100
         for i in range(0, len(points), batch_size):
-            batch = points[i:i + batch_size]
+            batch = points[i : i + batch_size]
             client.upsert(collection_name=collection, points=batch)
 
     return len(points)
 
 
-def chunk_strat(text: str, args, model: SentenceTransformer) -> list[str]:
+def chunk_strat(text: str, args, model: SentenceTransformer) -> list[str] | Any:
     """Pick the right chunking strategy based on args."""
     if args.chunking == "semantic":
         chunker = SemanticChunker(
@@ -141,7 +151,7 @@ def chunk_strat(text: str, args, model: SentenceTransformer) -> list[str]:
 
 def cmd_pdf(args, client, model, _user_id):
     """Ingest PDF files."""
-    files = []
+    files: List[Path] = []
     for path in args.files:
         p = Path(path)
         if p.is_dir():
@@ -169,8 +179,13 @@ def cmd_pdf(args, client, model, _user_id):
 
         chunks = chunk_strat(text, args, model)
         count = ingest_chunks(
-            client, model, args.collection, chunks,
-            _user_id, source=pdf_path.name, doc_type="pdf",
+            client,
+            model,
+            args.collection,
+            chunks,
+            _user_id,
+            source=pdf_path.name,
+            doc_type="pdf",
         )
         print(f"  -> {count} chunks ingested")
         total += count
@@ -199,8 +214,13 @@ def cmd_text(args, client, model, _user_id):
 
         chunks = chunk_strat(text, args, model)
         count = ingest_chunks(
-            client, model, args.collection, chunks,
-            _user_id, source=p.name, doc_type="text",
+            client,
+            model,
+            args.collection,
+            chunks,
+            _user_id,
+            source=p.name,
+            doc_type="text",
         )
         print(f"  -> {count} chunks ingested")
         total += count
@@ -238,8 +258,13 @@ def cmd_write(args, client, model, _user_id):
 
     chunks = chunk_strat(text, args, model)
     count = ingest_chunks(
-        client, model, args.collection, chunks,
-        _user_id, source=title, doc_type="manual",
+        client,
+        model,
+        args.collection,
+        chunks,
+        _user_id,
+        source=title,
+        doc_type="manual",
     )
 
     print(f"Done. Ingested {count} chunks as '{title}'")
@@ -258,9 +283,11 @@ def cmd_list(args, client, model, _user_id):
 
     results = client.scroll(
         collection_name=args.collection,
-        scroll_filter=Filter(must=[
-            FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
-        ]),
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
+            ]
+        ),
         limit=100,
         with_payload=True,
         with_vectors=False,
@@ -294,7 +321,7 @@ def cmd_delete(args, client, model, _user_id):
         print("Specify --source to delete. Use 'list' command to see sources.")
         return
 
-    filter_conditions = [
+    filter_conditions: Any = [
         FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
         FieldCondition(key="source", match=MatchValue(value=args.source)),
     ]
@@ -306,42 +333,56 @@ def cmd_delete(args, client, model, _user_id):
     print(f"Deleted all chunks from source '{args.source}' for user {_user_id}")
 
 
-
 def main():
     parser = argparse.ArgumentParser(description="HuRI RAG Ingestion Tool")
     parser.add_argument("--user-id", type=str, default=None)
     parser.add_argument("--collection", type=str, default="documents")
     parser.add_argument("--qdrant-url", type=str, default="http://localhost:6333")
     parser.add_argument("--embedding-model", type=str, default="BAAI/bge-large-en-v1.5")
-    parser.add_argument("--chunk-size", type=int, default=500, help="Target chunk size in words (fixed mode)")
-    parser.add_argument("--overlap", type=int, default=50, help="Overlap between chunks in words (fixed mode)")
-    parser.add_argument("--chunking", type=str, default="fixed",
-                        choices=["semantic", "fixed"],
-                        help="Chunking strategy: 'semantic' (default) or 'fixed'")
-    parser.add_argument("--semantic-strategy", type=str, default="percentile",
-                        choices=["percentile", "threshold", "stddev"],
-                        help="Semantic chunking strategy (default: percentile)")
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=500,
+        help="Target chunk size in words (fixed mode)",
+    )
+    parser.add_argument(
+        "--overlap",
+        type=int,
+        default=50,
+        help="Overlap between chunks in words (fixed mode)",
+    )
+    parser.add_argument(
+        "--chunking",
+        type=str,
+        default="fixed",
+        choices=["semantic", "fixed"],
+        help="Chunking strategy: 'semantic' (default) or 'fixed'",
+    )
+    parser.add_argument(
+        "--semantic-strategy",
+        type=str,
+        default="percentile",
+        choices=["percentile", "threshold", "stddev"],
+        help="Semantic chunking strategy (default: percentile)",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # pdf
     p_pdf = subparsers.add_parser("pdf", help="Ingest PDF files")
     p_pdf.add_argument("files", nargs="+", help="PDF files or directories")
 
-    # text
     p_text = subparsers.add_parser("text", help="Ingest text files (.txt, .md)")
     p_text.add_argument("files", nargs="+", help="Text files")
 
-    # write
     p_write = subparsers.add_parser("write", help="Write text interactively")
     p_write.add_argument("--title", type=str, default=None, help="Title/source name")
 
-    # list
-    p_list = subparsers.add_parser("list", help="List ingested documents")
+    subparsers.add_parser("list", help="List ingested documents")
 
-    # delete
     p_delete = subparsers.add_parser("delete", help="Delete documents by source")
-    p_delete.add_argument("--source", type=str, required=True, help="Source name to delete")
+    p_delete.add_argument(
+        "--source", type=str, required=True, help="Source name to delete"
+    )
 
     args = parser.parse_args()
 
@@ -352,7 +393,6 @@ def main():
     client = QdrantClient(url=args.qdrant_url)
     model = SentenceTransformer(args.embedding_model)
 
-    # Dispatch
     commands = {
         "pdf": cmd_pdf,
         "text": cmd_text,
@@ -374,7 +414,7 @@ if __name__ == "__main__":
         # Ingest multiple PDFs
         python ingestion.py pdf doc1.pdf doc2.pdf doc3.pdf
 
-        # Ingest a whole folder of PDFs 
+        # Ingest a whole folder of PDFs
         # TODO: To verify and to add the support of hole paths
         python ingestion.py pdf ./my_documents/
 
@@ -391,7 +431,8 @@ if __name__ == "__main__":
         python ingestion.py --collection "my_docs" pdf report.pdf
 
         # Use a different ingestion strategy
-        python src/modules/rag/ingestion.py --chunking semantic --semantic-strategy threshold pdf "EN.pdf"
+        python src/modules/rag/ingestion.py \
+--chunking semantic --semantic-strategy threshold pdf "EN.pdf"
 
     """
     main()
