@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import yaml
 from ray.serve import Application
@@ -9,23 +10,23 @@ from src.modules.modules import get_modules
 from src.modules.rag.docker_services import OllamaService, QdrantService
 
 
-def load_services_config() -> dict:
+def load_services_config() -> Any:
     config_path = Path(__file__).resolve().parents[1] / "config" / "huri.yaml"
     with open(config_path) as f:
         config = yaml.safe_load(f)
     return config.get("services", {})
 
 
-def build_qdrant(config: dict):
-    return QdrantService.bind(
+def build_qdrant(config: dict) -> Any:
+    return QdrantService.bind(  # type: ignore[attr-defined]
         port=config.get("port", 6333),
         image=config.get("image", "qdrant/qdrant:latest"),
         storage_volume=config.get("storage_volume", "qdrant_data"),
     )
 
 
-def build_ollama(config: dict):
-    return OllamaService.options(
+def build_ollama(config: dict) -> Any:
+    return OllamaService.options(  # type: ignore[attr-defined]
         num_replicas=config.get("num_replicas", 1),
     ).bind(
         model=config.get("model", "mistral:7b"),
@@ -42,7 +43,7 @@ def build_app() -> Application:
     ollama = build_ollama(services_config.get("ollama", {}))
 
     handles = bind_deployment_handles(modules, ollama=ollama, qdrant=qdrant)
-    app: Application = HuRI.bind(modules, handles)
+    app: Application = HuRI.bind(modules, handles)  # type: ignore[attr-defined]
     return app
 
 

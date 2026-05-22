@@ -12,7 +12,6 @@ from omegaconf import OmegaConf
 
 from src.core.dataclasses.config import ClientConfig
 
-
 USER_ID_FILE = os.path.expanduser("~/.huri_user_id")
 
 
@@ -26,6 +25,7 @@ def load_user_id() -> str | None:
 def save_user_id(_user_id: str):
     with open(USER_ID_FILE, "w") as f:
         f.write(_user_id)
+
 
 def load_client_config(path: str) -> ClientConfig:
     with open(path) as f:

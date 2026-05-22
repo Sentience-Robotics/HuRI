@@ -1,12 +1,13 @@
-import time
 import socket
 import subprocess
+import time
+from typing import Any
 
 import httpx
 from ray import serve
 
 
-def find_free_port() -> int:
+def find_free_port() -> Any:
     """
     Ask the OS for a random free port.
     We need this because if we run multiple Ollama containers,
@@ -37,7 +38,8 @@ def is_container_running(name: str) -> bool:
     """Check if a Docker container with this name is already running."""
     result = subprocess.run(
         ["docker", "ps", "-q", "-f", f"name=^{name}$"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     return bool(result.stdout.strip())
 
@@ -72,47 +74,57 @@ class OllamaService:
         remove_container(self.container_name)
 
         cmd = [
-            "docker", "run", "-d",
-            "--name", self.container_name,
-            "-p", f"{self.port}:11434",
-            "-v", "ollama_shared:/root/.ollama",
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            self.container_name,
+            "-p",
+            f"{self.port}:11434",
+            "-v",
+            "ollama_shared:/root/.ollama",
         ]
 
         if gpu_devices:
-            cmd.extend([
-                "--device=/dev/kfd",
-                "--device=/dev/dri",
-                "--group-add=video",
-            ])
+            cmd.extend(
+                [
+                    "--device=/dev/kfd",
+                    "--device=/dev/dri",
+                    "--group-add=video",
+                ]
+            )
 
         cmd.append(image)
 
-        print(f"[OllamaService] Starting container '{self.container_name}' on port {self.port}...")
+        print(f"[OllamaService] Starting container \
+'{self.container_name}' on port {self.port}...")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"Docker failed: {result.stderr}")
 
-        print(f"[OllamaService] Waiting for Ollama to be ready...")
+        print("[OllamaService] Waiting for Ollama to be ready...")
         if not wait_for_service(f"{self.base_url}/api/tags"):
-            raise RuntimeError(f"Ollama didn't start within timeout on port {self.port}")
+            raise RuntimeError(f"Ollama didn't start within \
+timeout on port {self.port}")
 
         print(f"[OllamaService] Pulling model '{model}'...")
         pull_result = subprocess.run(
             ["docker", "exec", self.container_name, "ollama", "pull", model],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if pull_result.returncode != 0:
             raise RuntimeError(f"Failed to pull model: {pull_result.stderr}")
 
-        print(f"[OllamaService] Ready! container='{self.container_name}', port={self.port}, model='{model}'")
-
+        print(f"[OllamaService] Ready! \
+container='{self.container_name}', port={self.port}, model='{model}'")
 
     async def generate(
         self,
         messages: list,
         max_tokens: int = 1024,
         temperature: float = 0.1,
-    ) -> str:
+    ) -> Any:
         """
         Send messages to Ollama and return the response.
         This is what RAGHandle calls to get LLM answers.
@@ -137,8 +149,12 @@ class OllamaService:
         """Check if this Ollama instance is alive."""
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.base_url}/api/tags")
-                return {"status": "ok", "port": self.port, "container": self.container_name}
+                await client.get(f"{self.base_url}/api/tags")
+                return {
+                    "status": "ok",
+                    "port": self.port,
+                    "container": self.container_name,
+                }
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
@@ -176,10 +192,15 @@ class QdrantService:
         remove_container(self.container_name)
 
         cmd = [
-            "docker", "run", "-d",
-            "--name", self.container_name,
-            "-p", f"{self.port}:6333",
-            "-v", f"{storage_volume}:/qdrant/storage",
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            self.container_name,
+            "-p",
+            f"{self.port}:6333",
+            "-v",
+            f"{storage_volume}:/qdrant/storage",
             image,
         ]
 
@@ -189,10 +210,11 @@ class QdrantService:
             raise RuntimeError(f"Docker failed: {result.stderr}")
 
         if not wait_for_service(f"{self.url}/healthz"):
-            raise RuntimeError(f"Qdrant didn't start within timeout on port {self.port}")
+            raise RuntimeError(
+                f"Qdrant didn't start within timeout on port {self.port}"
+            )
 
         print(f"[QdrantService] Ready on port {self.port}")
-
 
     def _is_healthy(self) -> bool:
         try:
@@ -201,20 +223,18 @@ class QdrantService:
         except Exception:
             return False
 
-
     async def get_url(self) -> str:
         """Return the URL. Called by RAGHandle to know where Qdrant is."""
         return self.url
 
-
     async def health(self) -> dict:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.url}/healthz")
+                await client.get(f"{self.url}/healthz")
                 return {"status": "ok", "port": self.port, "url": self.url}
         except Exception as e:
             return {"status": "error", "error": str(e)}
 
-
     def __del__(self):
-        print(f"[QdrantService] Actor destroyed. Container '{self.container_name}' left running.")
+        print(f"[QdrantService] Actor destroyed. \
+Container '{self.container_name}' left running.")
