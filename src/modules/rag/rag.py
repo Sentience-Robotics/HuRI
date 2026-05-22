@@ -17,6 +17,7 @@ class RAGQuery:
     _user_id: str
     question: str
     preferences: dict = field(default_factory=dict)
+    history: list[dict] | None = None
     # preferences can include: language, tone,
     # response_format, max_length, system_prompt, extra_instructions, etc.
 
@@ -329,14 +330,17 @@ class RAG(ModuleWithHandle, ModuleWithId):
             ),
         )
 
-        result: RAGResult = await self._handle.process.remote(query)
-
-        self.history.append({"role": "user", "content": question_text})
-        self.history.append({"role": "assistant", "content": result.answer})
+        if self._handle is None:
+            print("[RAG] No handle available, returning None")
+            return None
 
         result: RAGResult | Any = None
         if self._handle is not None:
             result = await self._handle.process.remote(query)
+
+        self.history.append({"role": "user", "content": question_text})
+        self.history.append({"role": "assistant", "content": result.answer})
+
         return result
 
     def update_preferences(self, new_preferences: dict):
