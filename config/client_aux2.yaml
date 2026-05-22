@@ -1,0 +1,26 @@
+huri_url: ws://localhost:8000/session
+
+topic_list: ["transcript", "question", "rag_response"]
+sample_rate: 16000
+frame_duration: 0.030
+modules:
+  mic:
+    name: mic
+    args:
+      vad_agressiveness: 3
+      silence_duration: 1.5
+      block_duration: ${frame_duration}
+  stt:
+    name: stt
+    args:
+      language: "en"
+      block_duration: ${frame_duration}
+    logging: INFO
+  tag:
+    name: tag
+    logging: INFO
+  rag:
+    name: rag
+    args:
+      language: "en"
+      tone: "formal"

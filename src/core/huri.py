@@ -7,6 +7,7 @@ from ray.serve import handle
 
 from src.modules.factory import Module, ModuleFactory
 from src.modules.utils.sender import Sender
+
 from .app import app
 from .dataclasses.config import ClientConfig
 from .session import Session

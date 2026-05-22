@@ -14,9 +14,10 @@ class Module:
 class ModuleWithHandle(Module):
     _handle_cls: Type[Any]
 
-    def __init__(self, _handle: handle.DeploymentHandle = None, **kwargs):
+    def __init__(self, _handle: handle.DeploymentHandle | None = None, **kwargs):
         super().__init__(**kwargs)
         self._handle = _handle
+
 
 class ModuleWithId(Module):
     def __init__(self, _user_id: str, **kwargs):
