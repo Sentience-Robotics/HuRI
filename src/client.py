@@ -34,4 +34,7 @@ async def launch_client():
 
 
 if __name__ == "__main__":
-    asyncio.run(launch_client())
+    try:
+        asyncio.run(launch_client())
+    except KeyboardInterrupt:
+        pass

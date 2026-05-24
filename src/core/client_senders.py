@@ -82,12 +82,20 @@ class TextSender(ClientSender):
         super().__init__(**kwargs)
 
     async def input_loop(self):
+        print("'\\exit' or CTRL+D/C to exit.")
         session: PromptSession = PromptSession()
-        while True:
-            with patch_stdout():
-                text = await session.prompt_async(">> ")
+        try:
+            while True:
+                with patch_stdout():
+                    text = await session.prompt_async(">> ")
+                if text == "\\exit":
+                    return
+                await self.send(self.output_type, Sentence(text))
 
-            await self.send(self.output_type, Sentence(text))
+        except (EOFError, KeyboardInterrupt):
+            pass
+        finally:
+            print("TextSender Exited...")
 
 
 def get_senders() -> Dict[str, Type[ClientSender]]:

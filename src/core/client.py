@@ -35,10 +35,14 @@ class Client:
             f.write(_user_id)
 
     async def _receive_loop(self, ws: websockets.ClientConnection):
-        while True:
-            text = await ws.recv()
-            print("<<", text)
-            await asyncio.sleep(0.1)
+        try:
+            while True:
+                text = await ws.recv()
+                print("<<", text)
+                await asyncio.sleep(0.1)
+
+        except (asyncio.CancelledError, websockets.ConnectionClosedOK):
+            pass
 
     async def run(self):
         async with websockets.connect(self.config.huri_url) as ws:
@@ -59,7 +63,9 @@ class Client:
                 self._save_user_id(user_id)
                 print(f"Session started with _user_id: {user_id}")
 
+            receive_task = asyncio.create_task(self._receive_loop(ws))
             await asyncio.gather(
                 *(sender.input_loop() for sender in senders),
-                self._receive_loop(ws),
             )
+
+            receive_task.cancel()
