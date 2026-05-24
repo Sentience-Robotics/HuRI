@@ -13,6 +13,8 @@ webrtcvad
 faster-whisper
 qdrant-client
 sentence-transformers
+pypdf
+semantic_chunker
 
 
 # client

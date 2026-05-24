@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 
 
 @dataclass
@@ -30,6 +30,7 @@ class ClientSenderConfig:
 
 @dataclass
 class ClientConfig:
+    user_id: Optional[str]
     huri_url: str
     topic_list: List[str]
     senders: Dict[str, ClientSenderConfig]
@@ -46,6 +47,7 @@ class ClientConfig:
             for module_id, mod_raw in raw.get("modules", {}).items()
         }
         return cls(
+            user_id=None,
             huri_url=raw["huri_url"],
             topic_list=raw["topic_list"],
             senders=senders,

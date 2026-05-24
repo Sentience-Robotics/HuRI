@@ -57,7 +57,7 @@ class ModuleFactory:
         self._registry[name] = module_cls
 
     def create(
-        self, _user_id: str, name: str, args: Mapping[str, Any] | None = None
+        self, user_id: str, name: str, args: Mapping[str, Any] | None = None
     ) -> Module:
 
         if name not in self._registry:
@@ -76,18 +76,16 @@ class ModuleFactory:
             kwargs["_handle"] = self._handles[name]
 
         if issubclass(module_cls, ModuleWithId):
-            kwargs["_user_id"] = _user_id
+            kwargs["_user_id"] = user_id
 
         return module_cls(**kwargs)
 
     def create_from_config(
-        self, _user_id: str, module_configs: Dict[str, ModuleConfig]
+        self, user_id: str, module_configs: Dict[str, ModuleConfig]
     ) -> List[Module]:
         modules: List[Module] = []
         for module_config in module_configs.values():
-            modules.append(
-                self.create(_user_id, module_config.name, module_config.args)
-            )
+            modules.append(self.create(user_id, module_config.name, module_config.args))
         if modules == []:
             raise Exception
 
