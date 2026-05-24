@@ -84,7 +84,11 @@ class HuRI:
 
                     await session.publish(topic, data)
 
-            except (WebSocketDisconnect, RuntimeError):
+            except RuntimeError as e:
+                print(f"[ERROR] Client {user_id}:", e)
+            except WebSocketDisconnect:
+                pass
+            finally:
                 print(f"Client {user_id} disconnected")
 
         await receive_loop(self.clients[session_id], ws)

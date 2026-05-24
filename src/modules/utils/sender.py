@@ -22,7 +22,6 @@ class Sender(Module):
         self.input_type = type
 
     async def process(self, data: EventData | bytes):
-        print(data)
         if isinstance(data, bytes):
             await self.ws.send_bytes(data)
         elif isinstance(data, EventData):
