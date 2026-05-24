@@ -1,12 +1,15 @@
 huri_url: ws://localhost:8000/session
 
-topic_list: [question]
+topic_list: [question, rag_response]
 
 senders:
   text:
     name: text
 
 modules:
-  tag:
-    name: tag
+  rag:
+    name: rag
+    args:
+      language: en
+      tone: formal
     logging: INFO

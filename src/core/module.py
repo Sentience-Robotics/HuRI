@@ -14,7 +14,7 @@ class Module:
 class ModuleWithHandle(Module):
     _handle_cls: Type[Any]
 
-    def __init__(self, _handle: handle.DeploymentHandle | None = None, **kwargs):
+    def __init__(self, _handle: handle.DeploymentHandle, **kwargs):
         super().__init__(**kwargs)
         self._handle = _handle
 
