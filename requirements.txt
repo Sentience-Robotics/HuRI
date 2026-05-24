@@ -11,6 +11,8 @@ numpy
 ray[serve]
 webrtcvad
 faster-whisper
+qdrant-client
+sentence-transformers
 
 
 # client

@@ -14,6 +14,16 @@ class Module:
 class ModuleWithHandle(Module):
     _handle_cls: Type[Any]
 
-    def __init__(self, handle: handle.DeploymentHandle):
-        super().__init__()
-        self.handle = handle
+    def __init__(self, _handle: handle.DeploymentHandle | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self._handle = _handle
+
+
+class ModuleWithId(Module):
+    def __init__(self, _user_id: str, **kwargs):
+        super().__init__(**kwargs)
+        self._user_id = _user_id
+
+    def get_user_context(self) -> dict:
+        """Override in subclasses to provide user-specific context."""
+        return {"_user_id": self._user_id}
