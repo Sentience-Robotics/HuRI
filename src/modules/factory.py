@@ -27,18 +27,18 @@ class EventDataFactory:
 
         event_cls = self._registry[topic]
         if isinstance(data, bytes):
-            if isinstance(event_cls, bytes):
+            if issubclass(event_cls, bytes):
                 return data
             else:
                 raise RuntimeError(f"mismatched event data type: \
-{event_cls} is not bytes but should be.")
+{event_cls} is not type bytes but should be.")
 
         else:
-            if isinstance(event_cls, EventData):
+            if issubclass(event_cls, EventData):
                 return event_cls(**data)
             else:
                 raise RuntimeError(f"mismatched event data type: \
-{event_cls} is not EventData but should be.")
+{event_cls} is not derived from EventData but should be.")
 
 
 class ModuleFactory:
