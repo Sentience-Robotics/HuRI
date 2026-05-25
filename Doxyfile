@@ -55,7 +55,9 @@ PROJECT_NUMBER         =
 # quick idea about the purpose of the project. Keep the description short.
 
 PROJECT_BRIEF          = HuRI is an open-source research project focused on conversational AI for humanoid robots and virtual avatars.
-HuRI provides a modular architecture that allows developers to design, implement, and run AI models within customizable conversational pipelines defined by the user. The platform supports the integration of multiple AI modules, including:
+HuRI provides a modular architecture that allows developers to design, implement, and run AI modules within customizable conversational pipelines defined by the user.
+HuRI is launched as a multi-client server, to handle multiple client (robots) conversationnal requests.
+The framework supports the implementation and integration of multiple AI modules, including:
 Speech-to-Text (STT) and Text-to-Speech (TTS), Retrieval-Augmented Generation (RAG), Emotional analysis (EMO), Motion and gesture generation (MOV)
 
 # With the PROJECT_LOGO tag one can specify a logo or an icon that is included
