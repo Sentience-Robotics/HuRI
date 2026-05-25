@@ -34,7 +34,8 @@ class EventGraph:
                     async for item in result:
                         if item is None:
                             continue
-                        await self.publish(module.output_type, item)
+                        topic = module.partial_type or module.output_type
+                        await self.publish(topic, item)
                 except Exception as e:
                     print(f"[ERROR] async generator in {module}: {e}")
 

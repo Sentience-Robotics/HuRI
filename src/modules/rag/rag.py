@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -37,6 +38,7 @@ class RAGHandle:
     collection/data in the vector DB, runs embed -> search -> LLM.
     """
 
+
     def __init__(
         self,
         ollama_handle=None,
@@ -67,6 +69,7 @@ class RAGHandle:
         self._qdrant_url = qdrant_url
         self._qdrant: QdrantClient | None = None
 
+
     async def _get_qdrant(self):
         """Connect to Qdrant on first use. Solves the async-in-init problem."""
         if self._qdrant is None:
@@ -75,6 +78,7 @@ class RAGHandle:
             self._qdrant = QdrantClient(url=self._qdrant_url)
             print(f"[RAGHandle] Connected to Qdrant at {self._qdrant_url}")
         return self._qdrant
+
 
     def _resolve_user_context(self, _user_id: str) -> tuple[str, dict | None]:
         """
@@ -92,8 +96,10 @@ class RAGHandle:
 
         return collection, filters
 
+
     def _embed(self, text) -> list[float] | Any:
         return self.embed_model.encode(str(text), normalize_embeddings=True).tolist()
+
 
     def _search(
         self,
@@ -131,6 +137,7 @@ class RAGHandle:
             }
             for point in doc_results
         ]
+
 
     def _build_prompt(
         self,
@@ -180,6 +187,7 @@ Don't speak about the sources, just use them to answer the question."
 
         return system_prompt, user_prompt
 
+
     async def _llm_generate(
         self,
         system_prompt: str,
@@ -201,16 +209,37 @@ Don't speak about the sources, just use them to answer the question."
             )
         elif self.llm_provider == "ollama":
             return await self._call_ollama(messages, max_tokens)
-
         elif self.llm_provider == "api":
             return await self._call_openai_compatible(
                 f"{self.llm_url}/v1/chat/completions",
-                messages,
-                max_tokens,
-                self.llm_api_key,
+                messages, max_tokens, self.llm_api_key,
             )
         else:
             raise ValueError(f"Unknown llm_provider: {self.llm_provider}")
+
+
+    async def _llm_generate_stream(
+        self, system_prompt: str, user_prompt: str, preferences: dict
+    ):
+        """Yields tokens as they arrive."""
+        max_tokens = preferences.get("max_length", 1024)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        if self.ollama_handle:
+            async for token in self.ollama_handle.generate_stream.options(
+                stream=True
+            ).remote(messages, max_tokens):
+                yield token
+        elif self.llm_provider == "ollama":
+            async for token in self._call_ollama_stream(messages, max_tokens):
+                yield token
+        else:
+            result = await self._llm_generate(system_prompt, user_prompt, preferences)
+            yield result
+
 
     async def _call_openai_compatible(
         self, url: str, messages: list, max_tokens: int, api_key: str = ""
@@ -232,7 +261,8 @@ Don't speak about the sources, just use them to answer the question."
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
 
-    async def _call_ollama(self, messages: list, max_tokens: int) -> Any:
+
+    async def _call_ollama(self, messages: list, max_tokens: int) -> str:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 f"{self.llm_url}/api/chat",
@@ -246,30 +276,41 @@ Don't speak about the sources, just use them to answer the question."
             resp.raise_for_status()
             return resp.json()["message"]["content"]
 
+
+    async def _call_ollama_stream(self, messages: list, max_tokens: int):
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{self.llm_url}/api/chat",
+                json={
+                    "model": self.llm_model,
+                    "messages": messages,
+                    "stream": True,
+                    "options": {"num_predict": max_tokens, "temperature": 0.1},
+                },
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    token = chunk.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if chunk.get("done", False):
+                        return
+
+
     async def process(self, query: RAGQuery) -> RAGResult:
-        """
-        Main entry point. Called by the RAG module.
-        Uses _user_id to determine which collection / filters to use.
-        """
-
-        print(f"[RAG] Question: {query.question}")
-
         qdrant = await self._get_qdrant()
-
         collection, filters = self._resolve_user_context(query._user_id)
         query_vector = self._embed(query.question)
         chunks = self._search(qdrant, query_vector, collection, filters)
 
-        print(f"[RAG] Found {len(chunks)} chunks")
-        for c in chunks:
-            print(f"  - score: {c['score']:.2f} | {c['text'][:100]}...")
-
         system_prompt, user_prompt = self._build_prompt(
             query.question, chunks, query.preferences, query.history
         )
-        print(f"[RAG] System prompt: {system_prompt[:200]}...")
         answer = await self._llm_generate(system_prompt, user_prompt, query.preferences)
-        print(f"[RAG] Answer: {answer}")
 
         return RAGResult(
             answer=answer,
@@ -280,10 +321,26 @@ Don't speak about the sources, just use them to answer the question."
         )
 
 
+    async def process_stream(self, query: RAGQuery):
+        qdrant = await self._get_qdrant()
+        collection, filters = self._resolve_user_context(query._user_id)
+        query_vector = self._embed(query.question)
+        chunks = self._search(qdrant, query_vector, collection, filters)
+
+        system_prompt, user_prompt = self._build_prompt(
+            query.question, chunks, query.preferences, query.history
+        )
+        async for token in self._llm_generate_stream(
+            system_prompt, user_prompt, query.preferences
+        ):
+            yield token
+
+
 class RAG(ModuleWithHandle, ModuleWithId):
     _handle_cls = RAGHandle
     input_type = "question"
     output_type = "rag_response"
+    partial_type = "rag_stream"
 
     def __init__(
         self,
@@ -295,6 +352,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
         max_length=1024,
         extra_instructions="",
         max_history=10,
+        stream=True,
         **kwargs,
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
@@ -306,41 +364,67 @@ class RAG(ModuleWithHandle, ModuleWithId):
             "max_length": max_length,
             "extra_instructions": extra_instructions,
         }
+        self.stream = stream
         self.history: list[dict] = []
         self.max_history = max_history
 
-    async def process(self, data: Sentence) -> Optional[RAGResult]:
-        """
-        Called when a "question" event arrives through the event bus.
-        Packages _user_id + question, sends to the stateless RAGHandle.
-        """
-        question_text = data.text
+    async def process(self, data: Sentence):
+        query = self._build_query(data.text)
+        if self._handle is None:
+            return
 
-        query = RAGQuery(
-            _user_id=self._user_id if self._user_id else "anonymous",
+        if self.stream:
+            async for token in self._stream_answer(data.text, query):
+                yield token
+        else:
+            result = await self._handle.process.remote(query)
+            self.history.append({"role": "user", "content": data.text})
+            self.history.append({"role": "assistant", "content": result.answer})
+            yield result
+
+
+    async def _stream_answer(self, question_text, query):
+        full_answer = []
+        async for token in self._handle.process_stream.options(
+            stream=True
+        ).remote(query):
+            full_answer.append(token)
+            yield token
+        
+        print(f"[RAG] Full answer for question '{question_text}': {''.join(full_answer)}")
+
+        self.history.append({"role": "user", "content": question_text})
+        self.history.append({"role": "assistant", "content": "".join(full_answer)})
+
+
+    async def process_stream(self, data: Sentence):
+        """Streaming path. Yields tokens."""
+        query = self._build_query(data.text)
+        if self._handle is None:
+            return
+
+        full_answer = []
+        async for token in self._handle.process_stream.options(
+            stream=True
+        ).remote(query):
+            full_answer.append(token)
+            yield token
+
+        self.history.append({"role": "user", "content": data.text})
+        self.history.append({"role": "assistant", "content": "".join(full_answer)})
+
+    def _build_query(self, question_text: str) -> RAGQuery:
+        return RAGQuery(
+            _user_id=self._user_id or "anonymous",
             question=question_text,
             preferences=self.preferences,
             history=(
                 self.history
                 if len(self.history) <= self.max_history
-                else self.history[-self.max_history :]
+                else self.history[-self.max_history:]
             ),
         )
 
-        if self._handle is None:
-            print("[RAG] No handle available, returning None")
-            return None
-
-        result: RAGResult | None = None
-        if self._handle is not None:
-            result = await self._handle.process.remote(query)
-
-        self.history.append({"role": "user", "content": question_text})
-        self.history.append(
-            {"role": "assistant", "content": result.answer if result else None}
-        )
-
-        return result
 
     def update_preferences(self, new_preferences: dict):
         """Client can update preferences mid-session via the event bus."""
