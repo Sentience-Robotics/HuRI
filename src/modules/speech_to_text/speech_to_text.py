@@ -1,5 +1,4 @@
 import asyncio
-from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
@@ -7,13 +6,7 @@ from faster_whisper import WhisperModel
 
 from src.core.module import Module
 
-from .record_speech import Voice
-
-
-@dataclass
-class Transcript:
-    text: str
-    end: bool
+from .events import Transcript, Voice
 
 
 class STT(Module):

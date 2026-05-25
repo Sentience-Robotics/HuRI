@@ -1,15 +1,9 @@
-from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Optional
 
 from src.core.module import Module
 
-from .speech_to_text import Transcript
-
-
-@dataclass
-class Sentence:
-    text: str
+from .events import Sentence, Transcript
 
 
 class TAG(Module):

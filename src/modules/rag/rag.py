@@ -5,9 +5,13 @@ import httpx
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 from ray import serve
+from ray.serve import handle
 from sentence_transformers import SentenceTransformer
 
 from src.core.module import ModuleWithHandle, ModuleWithId
+from src.modules.speech_to_text.events import Sentence
+
+from .events import RAGResult
 
 
 @dataclass
@@ -20,14 +24,6 @@ class RAGQuery:
     history: list[dict] | None = None
     # preferences can include: language, tone,
     # response_format, max_length, system_prompt, extra_instructions, etc.
-
-
-@dataclass
-class RAGResult:
-    """What RAGHandle returns."""
-
-    answer: str
-    sources: list[dict] = field(default_factory=list)
 
 
 @serve.deployment(
@@ -291,8 +287,8 @@ class RAG(ModuleWithHandle, ModuleWithId):
 
     def __init__(
         self,
-        _handle=None,
-        _user_id="",
+        _handle: handle.DeploymentHandle[RAGHandle],
+        _user_id: str,
         language="en",
         tone="formal",
         response_format="paragraph",
@@ -302,6 +298,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
         **kwargs,
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
+
         self.preferences = {
             "language": language,
             "tone": tone,
@@ -312,12 +309,12 @@ class RAG(ModuleWithHandle, ModuleWithId):
         self.history = []
         self.max_history = max_history
 
-    async def process(self, data) -> Optional[Any]:
+    async def process(self, data: Sentence) -> Optional[RAGResult]:
         """
         Called when a "question" event arrives through the event bus.
         Packages _user_id + question, sends to the stateless RAGHandle.
         """
-        question_text = data.text if hasattr(data, "text") else str(data)
+        question_text = data.text
 
         query = RAGQuery(
             _user_id=self._user_id if self._user_id else "anonymous",

@@ -4,7 +4,7 @@ from ray.serve import handle
 
 
 class Module:
-    input_type: Optional[str]
+    input_type: str
     output_type: Optional[str]
 
     async def process(self, _) -> Optional[Any]:
@@ -14,7 +14,7 @@ class Module:
 class ModuleWithHandle(Module):
     _handle_cls: Type[Any]
 
-    def __init__(self, _handle: handle.DeploymentHandle | None = None, **kwargs):
+    def __init__(self, _handle: handle.DeploymentHandle, **kwargs):
         super().__init__(**kwargs)
         self._handle = _handle
 

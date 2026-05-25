@@ -22,9 +22,14 @@ def get_config_dir() -> Path:
     return config_dir
 
 
-def load_user_id() -> str | None:
+def load_user_id(path: str | None = None) -> str | None:
     """Load existing _user_id, or return None if new user."""
-    id_file = get_config_dir() / "_user_id"
+    id_file: Path
+
+    if path is None:
+        id_file = get_config_dir() / "_user_id"
+    else:
+        id_file = Path(path)
     if id_file.exists():
         uid = id_file.read_text().strip()
         if uid:
@@ -32,18 +37,24 @@ def load_user_id() -> str | None:
     return None
 
 
-def save_user_id(_user_id: str):
-    id_file = get_config_dir() / "_user_id"
+def save_user_id(_user_id: str, path: str | None = None):
+    id_file: Path
+
+    if path is None:
+        id_file = get_config_dir() / "_user_id"
+    else:
+        id_file = Path(path)
+
     id_file.write_text(_user_id)
     if platform.system() != "Windows":
         id_file.chmod(0o600)
 
 
-def get_or_create_user_id() -> str:
+def get_or_create_user_id(path: str | None = None) -> str:
     """Load existing or generate new _user_id."""
-    uid = load_user_id()
+    uid = load_user_id(path)
     if uid:
         return uid
     uid = str(uuid.uuid4())
-    save_user_id(uid)
+    save_user_id(uid, path)
     return uid
