@@ -81,15 +81,6 @@ class RAGHandle:
 
 
     def _resolve_user_context(self, _user_id: str) -> tuple[str, dict | None]:
-        """
-        Given a _user_id, decide which collection to search
-        and which filters to apply.
-
-        Options (pick what fits your data model):
-          A) One collection per user:  collection = f"user_{_user_id}"
-          B) Shared collection, filter by _user_id in payload
-          C) Lookup in a DB to find the user's config
-        """
 
         collection = self.default_collection
         filters = {"_user_id": _user_id}
