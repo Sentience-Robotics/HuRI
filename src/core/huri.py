@@ -1,3 +1,5 @@
+import json
+import struct
 import uuid
 from typing import Dict, List, Type
 
@@ -5,7 +7,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from ray import serve
 from ray.serve import handle
 
-from src.modules.factory import Module, ModuleFactory
+from src.modules.factory import EventData, EventDataFactory, Module, ModuleFactory
 from src.modules.utils.sender import Sender
 
 from .app import app
@@ -20,10 +22,20 @@ class HuRI:
         self,
         modules: Dict[str, Type[Module]],
         handles: Dict[str, handle.DeploymentHandle],
+        events: Dict[str, Type[EventData]],
     ) -> None:
-        self.factory = ModuleFactory(handles)
+        self.module_factory = ModuleFactory(handles)
+        self.event_factory = EventDataFactory()
         for name, module_cls in modules.items():
-            self.factory.register(name, module_cls)
+            self.module_factory.register(name, module_cls)
+
+            event_cls = events.pop(module_cls.input_type, None)
+            self.event_factory.register(module_cls.input_type, event_cls)
+            if module_cls.output_type is None:
+                continue
+            event_cls = events.pop(module_cls.output_type, None)
+            self.event_factory.register(module_cls.output_type, event_cls)
+
         self.clients: Dict[str, Session] = {}
 
     @app.websocket("/session")
@@ -32,30 +44,52 @@ class HuRI:
         client_config_raw: Dict = await ws.receive_json()
         client_config = ClientConfig.from_dict(client_config_raw)
 
-        _user_id = client_config_raw.get("_user_id") or str(uuid.uuid4())
+        user_id = client_config_raw.get("user_id") or str(uuid.uuid4())
 
         senders: List[Module] = [
             Sender(ws, topic) for topic in client_config.topic_list
         ]
         modules: List[Module] = (
-            self.factory.create_from_config(_user_id, client_config.modules) + senders
+            self.module_factory.create_from_config(user_id, client_config.modules)
+            + senders
         )
 
-        await ws.send_json({"type": "session_init", "_user_id": _user_id})
+        await ws.send_json({"type": "session_init", "user_id": user_id})
 
         session_id = str(uuid.uuid4())
         self.clients[session_id] = Session(modules)
-        print(f"Client registered with _user_id={_user_id}, config: {client_config}")
+        print(f"Client registered with _user_id={user_id}, config: {client_config}")
 
         async def receive_loop(session: Session, ws: WebSocket):
             try:
                 while True:
                     msg = await ws.receive()
+
+                    if msg["type"] == "websocket.disconnect":
+                        raise WebSocketDisconnect()
+
                     if "bytes" in msg:
-                        chunk = msg["bytes"]
-                        await session.publish("chunk", chunk)
-            except (WebSocketDisconnect, RuntimeError):
-                print(f"Client {_user_id} disconnected")
+                        msg_bytes = msg["bytes"]
+                        topic_len = struct.unpack("!H", msg_bytes[:2])[0]
+
+                        topic = msg_bytes[2 : 2 + topic_len].decode()
+                        data = msg_bytes[2 + topic_len :]
+                    else:
+                        msg_text = msg["text"]
+                        event = json.loads(msg_text)
+                        topic = event["topic"]
+                        data = event["data"]
+
+                    data = self.event_factory.create(topic, data)
+
+                    await session.publish(topic, data)
+
+            except RuntimeError as e:
+                print(f"[ERROR] Client {user_id}:", e)
+            except WebSocketDisconnect:
+                pass
+            finally:
+                print(f"Client {user_id} disconnected")
 
         await receive_loop(self.clients[session_id], ws)
         del self.clients[session_id]

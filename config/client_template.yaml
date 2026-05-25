@@ -2,9 +2,19 @@
 huri_url: ws://localhost:8000/session
 
 # List of event topic the client will receive
-topic_list: ["topic1", "topic2"]
+topic_list: [topic1, topic2]
 
-# Define module custom args
+# Define senders to be used and their custom args
+senders:
+  # sender tag can be anything
+  example:
+    # sender name must be in the list of available ClientSender in Client instance (src.client_sender:get_senders)
+    name: my_sender
+    # if my_sender init with "model", "sample_rate" and "refresh_rate" params, they can be customized here
+    args:
+      refresh_rate: infinite
+
+# Define module to be used and their custom args
 modules:
   # module tag can be anything
   example:
@@ -12,4 +22,4 @@ modules:
     name: my_module
     # if my_module init with "model", "sample_rate" and "hello" params, they can be customized here
     args:
-      hello: "world"
+      hello: world

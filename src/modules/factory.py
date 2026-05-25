@@ -1,7 +1,44 @@
 from typing import Any, Dict, List, Mapping, Type
 
 from src.core.dataclasses.config import ModuleConfig
+from src.core.events import EventData
 from src.core.module import Module, ModuleWithHandle, ModuleWithId, handle
+
+
+class EventDataFactory:
+    def __init__(self):
+        self._registry: Dict[str, Type[EventData | bytes]] = {}
+
+    def register(self, topic: str, event_cls: Type[EventData | bytes] | None) -> None:
+        if topic in self._registry:
+            if event_cls is None or event_cls == self._registry[topic]:
+                return
+            else:
+                raise RuntimeError(f"event data mismatch: \
+{event_cls} and {self._registry[topic]} for event {topic}")
+        if event_cls is None:
+            raise RuntimeError(f"event data is not defined for event {topic}")
+
+        self._registry[topic] = event_cls
+
+    def create(self, topic: str, data: Mapping[str, Any] | bytes) -> EventData | bytes:
+        if topic not in self._registry:
+            raise RuntimeError(f"unknown event topic {topic}")
+
+        event_cls = self._registry[topic]
+        if isinstance(data, bytes):
+            if issubclass(event_cls, bytes):
+                return data
+            else:
+                raise RuntimeError(f"mismatched event data type: \
+{event_cls} is not type bytes but should be.")
+
+        else:
+            if issubclass(event_cls, EventData):
+                return event_cls(**data)
+            else:
+                raise RuntimeError(f"mismatched event data type: \
+{event_cls} is not derived from EventData but should be.")
 
 
 class ModuleFactory:
@@ -20,7 +57,7 @@ class ModuleFactory:
         self._registry[name] = module_cls
 
     def create(
-        self, _user_id: str, name: str, args: Mapping[str, Any] | None = None
+        self, user_id: str, name: str, args: Mapping[str, Any] | None = None
     ) -> Module:
 
         if name not in self._registry:
@@ -39,18 +76,16 @@ class ModuleFactory:
             kwargs["_handle"] = self._handles[name]
 
         if issubclass(module_cls, ModuleWithId):
-            kwargs["_user_id"] = _user_id
+            kwargs["_user_id"] = user_id
 
         return module_cls(**kwargs)
 
     def create_from_config(
-        self, _user_id: str, module_configs: Dict[str, ModuleConfig]
+        self, user_id: str, module_configs: Dict[str, ModuleConfig]
     ) -> List[Module]:
         modules: List[Module] = []
-        for _, module_config in module_configs.items():
-            modules.append(
-                self.create(_user_id, module_config.name, module_config.args)
-            )
+        for module_config in module_configs.values():
+            modules.append(self.create(user_id, module_config.name, module_config.args))
         if modules == []:
             raise Exception
 
