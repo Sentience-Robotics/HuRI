@@ -4,6 +4,23 @@ from ray.serve import handle
 
 
 class Module:
+    """
+    Base abstract class for all HuRI processing modules.
+
+    A Module represents a processing node inside the conversational
+    event pipeline. Modules consume events of a specific type and
+    optionally produce new events.
+
+    Subclasses must implement the `process()` method.
+
+    :input_type:
+        Event topic consumed by the module.
+
+    :output_type:
+        Event topic produced by the module.
+        Can be None for terminal modules.
+    """
+
     input_type: str
     output_type: Optional[str]
 
@@ -12,6 +29,19 @@ class Module:
 
 
 class ModuleWithHandle(Module):
+    """
+    Base module class with Ray Serve deployment handle support.
+
+    This class extends Module by attaching a Ray Serve deployment handle,
+    enabling distributed inference and remote execution.
+
+    :handle:
+        Ray Serve deployment handle associated with the module.
+
+    :handle_cls:
+        Expected handle implementation type.
+    """
+
     _handle_cls: Type[Any]
 
     def __init__(self, _handle: handle.DeploymentHandle, **kwargs):
@@ -20,6 +50,17 @@ class ModuleWithHandle(Module):
 
 
 class ModuleWithId(Module):
+    """
+    Base module class with user identity support.
+
+    This class extends Module by associating a unique user ID with
+    each module instance. Useful for maintaining user-specific state,
+    memory, personalization, or contextual processing.
+
+    :user_id:
+        Unique identifier associated with the current user.
+    """
+
     def __init__(self, _user_id: str, **kwargs):
         super().__init__(**kwargs)
         self._user_id = _user_id
