@@ -71,7 +71,6 @@ class RAGHandle:
 
 
     async def _get_qdrant(self):
-        """Connect to Qdrant on first use. Solves the async-in-init problem."""
         if self._qdrant is None:
             if self.qdrant_handle:
                 self._qdrant_url = await self.qdrant_handle.get_url.remote()
@@ -398,8 +397,3 @@ class RAG(ModuleWithHandle, ModuleWithId):
                 else self.history[-self.max_history:]
             ),
         )
-
-
-    def update_preferences(self, new_preferences: dict):
-        """Client can update preferences mid-session via the event bus."""
-        self.preferences.update(new_preferences)
