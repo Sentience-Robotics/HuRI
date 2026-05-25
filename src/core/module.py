@@ -4,12 +4,9 @@ from ray.serve import handle
 
 
 class Module:
-    input_type: Optional[str] = None
-    output_type: Optional[str] = None
-    partial_type: Optional[str] = None
+    input_type: Optional[str]
+    output_type: Optional[str]
 
-    def __init__(self, **kwargs):
-        pass  
 
     async def process(self, _) -> Optional[Any]:
         raise NotImplementedError

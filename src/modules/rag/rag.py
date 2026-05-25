@@ -340,7 +340,6 @@ class RAG(ModuleWithHandle, ModuleWithId):
     _handle_cls = RAGHandle
     input_type = "question"
     output_type = "rag_response"
-    partial_type = "rag_stream"
 
     def __init__(
         self,
@@ -373,7 +372,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
         if self._handle is None:
             return
 
-        if self.stream:
+        if True: # TODO: to change later self.stream
             async for token in self._stream_answer(data.text, query):
                 yield token
         else:
@@ -396,22 +395,6 @@ class RAG(ModuleWithHandle, ModuleWithId):
         self.history.append({"role": "user", "content": question_text})
         self.history.append({"role": "assistant", "content": "".join(full_answer)})
 
-
-    async def process_stream(self, data: Sentence):
-        """Streaming path. Yields tokens."""
-        query = self._build_query(data.text)
-        if self._handle is None:
-            return
-
-        full_answer = []
-        async for token in self._handle.process_stream.options(
-            stream=True
-        ).remote(query):
-            full_answer.append(token)
-            yield token
-
-        self.history.append({"role": "user", "content": data.text})
-        self.history.append({"role": "assistant", "content": "".join(full_answer)})
 
     def _build_query(self, question_text: str) -> RAGQuery:
         return RAGQuery(
