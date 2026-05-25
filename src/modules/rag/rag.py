@@ -306,7 +306,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
             "max_length": max_length,
             "extra_instructions": extra_instructions,
         }
-        self.history = []
+        self.history: list[dict] = []
         self.max_history = max_history
 
     async def process(self, data: Sentence) -> Optional[RAGResult]:
@@ -331,12 +331,14 @@ class RAG(ModuleWithHandle, ModuleWithId):
             print("[RAG] No handle available, returning None")
             return None
 
-        result: RAGResult | Any = None
+        result: RAGResult | None = None
         if self._handle is not None:
             result = await self._handle.process.remote(query)
 
         self.history.append({"role": "user", "content": question_text})
-        self.history.append({"role": "assistant", "content": result.answer})
+        self.history.append(
+            {"role": "assistant", "content": result.answer if result else None}
+        )
 
         return result
 

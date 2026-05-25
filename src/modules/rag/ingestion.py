@@ -423,7 +423,7 @@ if __name__ == "__main__":
         # Ingest a text file
         python ingestion.py text notes.txt story.md
 
-        # Specify a user ID (otherwise it will be auto-generated and saved for next time)
+        # Specify a user ID (otherwise it will be auto-generated and saved)
         python ingestion.py --user-id "abc-123" pdf report.pdf
 
         # Use a different collection
