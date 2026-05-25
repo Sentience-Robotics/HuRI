@@ -1,6 +1,6 @@
 from typing import Any
 
-from src.modules.services.docker_services import QdrantService
+from src.services.docker_services import QdrantService
 
 def build_qdrant(config: dict) -> Any:
     return QdrantService.bind(  # type: ignore[attr-defined]

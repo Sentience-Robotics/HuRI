@@ -1,6 +1,6 @@
 from typing import Any
 
-from src.modules.services.docker_services import OllamaService
+from src.services.docker_services import OllamaService
 
 def build_ollama(config: dict) -> Any:
     return OllamaService.options(  # type: ignore[attr-defined]

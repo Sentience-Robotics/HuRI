@@ -8,8 +8,8 @@ from src.core.huri import HuRI
 from src.modules.events import get_events
 from src.modules.factory import bind_deployment_handles
 from src.modules.modules import get_modules
-from src.modules.services.ollama import build_ollama
-from src.modules.services.qdrant import build_qdrant
+from src.services.ollama import build_ollama
+from src.services.qdrant import build_qdrant
 
 def load_services_config() -> Any:
     config_path = Path(__file__).resolve().parents[1] / "config" / "huri.yaml"
