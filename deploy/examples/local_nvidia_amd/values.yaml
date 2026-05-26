@@ -1,0 +1,281 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: docker.pommier.dev/huri
+  tag: base-2.55.1
+  pullPolicy: Always
+
+ray:
+  version: "2.55.1"
+  # Inline Ray Serve config (equivalent to config/huri.yaml).
+  # Change import_path or add deployments here without rebuilding the image.
+  #
+  # To pin a deployment to a specific GPU vendor, set resources in
+  # ray_actor_options matching the resources string in the desired workerGroup's
+  # rayStartParams:
+  #
+  #   ray_actor_options:
+  #     num_gpus: 1
+  #     resources: {"GPU_TYPE_NVIDIA": 1}   # → runs only on gpu-nvidia workers
+  #     resources: {"GPU_TYPE_AMD": 1}      # → runs only on gpu-amd workers
+  serveConfig: |
+    proxy_location: EveryNode
+    http_options:
+      host: 0.0.0.0
+      port: 8000
+    applications:
+      - name: huri-app
+        route_prefix: /
+        import_path: src.app:app
+        runtime_env:
+          env_vars:
+            RAY_COLOR_PREFIX: "1"
+        deployments:
+          - name: HuRI
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0
+          - name: TTS
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0.5
+              resources: {"GPU_TYPE_NVIDIA": 0.5}
+          - name: GestureGeneration
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0.5
+              resources: {"GPU_TYPE_NVIDIA": 0.5}
+
+head:
+  # ClusterIP is preferred on real clusters; use NodePort for kind/minikube/k3s.
+  serviceType: ClusterIP
+  # Pin the head to the control-plane node so it does not consume GPU memory.
+  # Set to {} to let the scheduler decide.
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: "true"
+  # affinity: {}  # optional Kubernetes affinity rules (nodeAffinity, podAffinity…)
+  tolerations:
+    # Required to schedule on the control-plane node (tainted by default in k3s).
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  rayStartParams:
+    num-cpus: "2"
+    num-gpus: "0"
+  resources:
+    limits:
+      cpu: "2"
+      memory: "8Gi"
+    requests:
+      cpu: "2"
+      memory: "4Gi"
+
+# Worker groups: one logical "gpu" group per vendor and one "cpu" group.
+#
+# Node placement (Kubernetes level)
+# ──────────────────────────────────
+#   nodeSelector / affinity / tolerations pin the *pod* to specific physical nodes.
+#
+# Ray deployment routing (Ray level)
+# ────────────────────────────────────
+#   rayStartParams.resources advertises named custom resources to the Ray
+#   scheduler. Ray Serve deployments request them via ray_actor_options.resources
+#   to run exclusively on a given worker group regardless of GPU vendor.
+#
+#   Example — to route a deployment to NVIDIA workers only:
+#     workerGroups[gpu-nvidia].customResources: '{"GPU_TYPE_NVIDIA":1}'
+#     serveConfig deployment ray_actor_options.resources: {"GPU_TYPE_NVIDIA": 1}
+#
+# Model volumes
+# ──────────────
+#   mountedModels lists keys from .Values.models. For each enabled model the
+#   template adds a PVC volume + volumeMount + env vars to the worker pod.
+workerGroups:
+  # --- GPU workers (Nvidia) ---
+  - groupName: gpu-nvidia
+    image: docker.pommier.dev/huri:nvidia-2.55.1
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    mountVoiceAssets: false
+    nodeSelector:
+      gpu: nvidia
+    # affinity: {}  # optional
+    tolerations: []
+    runtimeClassName: nvidia
+    customResources: '{\"GPU_TYPE_NVIDIA\":1}'
+    rayStartParams:
+      num-gpus: "1"
+    containerEnv:
+      - name: NVIDIA_VISIBLE_DEVICES
+        value: "all"
+      - name: NVIDIA_DRIVER_CAPABILITIES
+        value: "compute,utility"
+    # Models whose PVC will be mounted in this worker group.
+    # Keys must match entries under .Values.models.
+    mountedModels:
+      - cosytts
+      - emage
+    resources:
+      limits:
+        cpu: "4"
+        memory: "8Gi"
+        nvidia.com/gpu: "1"
+      requests:
+        cpu: "2"
+        memory: "4Gi"
+        nvidia.com/gpu: "1"
+    shmSize: 2Gi
+
+  # --- GPU workers (AMD) ---
+  - groupName: gpu-amd
+    image: docker.pommier.dev/huri:amd-2.55.1
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 1
+    mountVoiceAssets: true
+    nodeSelector:
+      gpu: amd
+    # affinity: {}  # optional
+    tolerations: []
+    hostIPC: true
+    customResources: '{\"GPU_TYPE_AMD\":1}'
+    podSecurityContext:
+      supplementalGroups: [39, 107]
+    rayStartParams:
+      num-gpus: "1"
+    containerEnv:
+      - name: HSA_OVERRIDE_GFX_VERSION
+        value: "11.5.1"
+    securityContext:
+      seLinuxOptions:
+        type: "spc_t"
+      # privileged: true  # Uncomment if spc_t still gets blocked by Fedora
+    mountedModels: []
+    resources:
+      limits:
+        cpu: "4"
+        memory: "8Gi"
+        amd.com/gpu: "1"
+      requests:
+        cpu: "2"
+        memory: "4Gi"
+        amd.com/gpu: "1"
+
+  # --- CPU-only workers ---
+  # Handles tasks that do not need a GPU (pre/post-processing, routing, etc.).
+  # Set replicas: 0 to disable this group entirely.
+  - groupName: cpu-workers
+    replicas: 0
+    minReplicas: 0
+    maxReplicas: 0
+    nodeSelector: {}
+    tolerations: []
+    rayStartParams:
+      num-cpus: "2"
+    mountedModels: []
+    resources:
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+    shmSize: 256Mi
+
+# AI model definitions.
+# Each key corresponds to a model that can be mounted into worker groups via
+# mountedModels. The chart creates one PVC per enabled model and a pre-install
+# Job that downloads the weights on first deploy (idempotent).
+models:
+  cosytts:
+    enabled: true
+    nodeSelector:
+      gpu: nvidia
+    pvc:
+      # Leave storageClassName empty to use the cluster default StorageClass.
+      storageClassName: ""
+      size: 20Gi
+      # Use ReadWriteMany if the PVC must be shared across multiple worker pods
+      # (requires a CSI driver that supports RWX, e.g. NFS or Longhorn).
+      # Use ReadWriteOnce for single-node clusters.
+      accessModes:
+        - ReadWriteOnce
+    # Where the model weights PVC is mounted inside the worker container.
+    mountPath: /models/cosytts
+    modelSource:
+      # type: modelscope | huggingface  (only modelscope is implemented)
+      type: modelscope
+      # ModelScope model ID — snapshot_download uses this as the sub-path
+      # inside mountPath, so the final path is mountPath/modelId.
+      modelId: iic/CosyVoice2-0.5B
+    # Env vars injected into every worker that mounts this model.
+    # HURI_MODEL_PATH must match mountPath/modelId (see text_to_speech.py).
+    env:
+      HURI_MODEL_PATH: /models/cosytts/iic/CosyVoice2-0.5B
+
+  emage:
+    enabled: true
+    nodeSelector:
+      gpu: nvidia
+    pvc:
+      storageClassName: ""
+      size: 10Gi
+      accessModes:
+        - ReadWriteOnce
+    # Where the EMAGE weights PVC is mounted inside the worker container.
+    mountPath: /models/emage
+    modelSource:
+      # type: huggingface — snapshot_download uses repoId as the sub-path
+      # inside mountPath, so the final path is mountPath/repoId.
+      type: huggingface
+      repoId: H-Liu1997/emage_audio
+    # HURI_EMAGE_REPO must match mountPath/repoId (see gesture.py).
+    env:
+      HURI_EMAGE_REPO: /models/emage/H-Liu1997/emage_audio
+
+# Voice sample asset volume.
+# Populate the PVC after first install:
+#   kubectl cp voice.wav <pod>:/assets/voice.wav
+voiceAssets:
+  enabled: true
+  pvc:
+    storageClassName: ""
+    size: 100Mi
+    accessModes:
+      - ReadWriteOnce
+  mountPath: /assets
+  env:
+    HURI_VOICE_SAMPLE_PATH: /assets/voice.wav
+    HURI_VOICE_TRANSCRIPT: "Hello, this is my voice sample for cloning."
+
+# Ingress for the Ray Serve endpoint (port 8000).
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  host: huri.example.com
+  tls: []
+  # - secretName: huri-tls
+  #   hosts:
+  #     - huri.example.com
+
+# Ingress for the Ray Dashboard (port 8265). Disabled by default – not safe to
+# expose publicly without additional auth.
+dashboard:
+  ingress:
+    enabled: false
+    className: nginx
+    annotations: {}
+    host: huri-dashboard.example.com
+    tls: []
+
+# Set to true to let this chart manage the KubeRay operator as a sub-chart.
+# Set to false when the operator is already installed cluster-wide (typical for
+# shared clusters).
+kuberay:
+  install: false
