@@ -85,4 +85,4 @@ utils: utility modules, like Sender (send event to Clients)
 
 ## Developper Documentation
 
-HuRI's complete documentation is available [here](https://docs.sentience-robotics.fr/s/pub/p/hu-ri-documentation-f4amcndYQg).
+HuRI's complete documentation is available [here](https://docs.sentience-robotics.fr/share/p1x9ikjkhf/p/hu-ri-documentation-f4amcndYQg).
