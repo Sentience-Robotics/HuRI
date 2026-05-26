@@ -1,5 +1,13 @@
 # HuRI
 
+## Presentation
+
+HuRI is an open-source research project focused on conversational AI for humanoid robots and virtual avatars.
+HuRI provides a modular architecture that allows developers to design, implement, and run AI modules within customizable conversational pipelines defined by the user.
+HuRI is launched as a multi-client server, to handle multiple client (robots) conversationnal requests.
+The framework supports the implementation and integration of multiple AI modules, including:
+Speech-to-Text (STT) and Text-to-Speech (TTS), Retrieval-Augmented Generation (RAG), Emotional analysis (EMO), Motion and gesture generation (MOV)
+
 ## Getting Started
 
 ### Prerequisites
@@ -47,3 +55,34 @@ python -m src.client --config [client_config_file_path]
 ```
 
 We have custom yaml file to define modules to use and how they are initialized, template [here](config/client_template.yaml).
+
+### Folder/Module structure
+
+- #### root
+
+Entrypoints:
+
+HuRI: app.py & launch_huri.py \
+Client: client.py
+
+- #### Core
+
+HuRI's Core classes:
+
+client & client_senders \
+events \
+huri \
+module \
+session
+
+- #### Modules
+
+Modules implementation:
+
+rag: rag's implementation \
+speech_to_text: speech to text implementation, including MIC (vad), STT (speech to text) and TAG (text aggregator) \
+utils: utility modules, like Sender (send event to Clients)
+
+## Developper Documentation
+
+HuRI's complete documentation is available [here](https://docs.sentience-robotics.fr/s/pub/p/hu-ri-documentation-f4amcndYQg).

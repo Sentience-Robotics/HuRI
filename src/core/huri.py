@@ -18,6 +18,16 @@ from .session import Session
 @serve.deployment
 @serve.ingress(app)
 class HuRI:
+    """
+    Main HuRI realtime conversational AI server.
+
+    This class manages realtime conversational sessions over FastAPI WebSockets
+    and dynamically orchestrates modular AI pipelines using Ray Serve.
+
+    Each client connection creates an isolated session containing a
+    configurable pipeline of AI modules.
+    """
+
     def __init__(
         self,
         modules: Dict[str, Type[Module]],
@@ -40,6 +50,30 @@ class HuRI:
 
     @app.websocket("/session")
     async def run_session(self, ws: WebSocket):
+        """
+        Handle a realtime client session over WebSocket.
+
+        This endpoint:
+            - Accepts a WebSocket connection
+            - Receives the client configuration
+            - Dynamically instantiates requested modules
+            - Creates a conversational session
+            - Routes incoming events through the AI pipeline
+            - Streams generated outputs back to the client
+
+        Supported protocols:
+            - JSON event messages
+            - Binary framed messages
+
+        JSON message example:
+            {
+                "topic": "text_in",
+                "data": {...}
+            }
+
+        Binary packet structure:
+            [topic_length][topic][payload]
+        """
         await ws.accept()
         client_config_raw: Dict = await ws.receive_json()
         client_config = ClientConfig.from_dict(client_config_raw)
