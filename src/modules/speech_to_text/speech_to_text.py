@@ -34,6 +34,8 @@ class STT(Module):
         self,
         model: str = "base",
         language: str = "en",
+        device: str = "auto",
+        compute_type: str = "auto",
         sample_rate: int = 16000,
         block_duration: float = 0.020,  # s
         transcribe_window: float = 2.0,  # s
@@ -41,7 +43,11 @@ class STT(Module):
     ):
         super().__init__()
 
-        self.model_faster = WhisperModel(model)
+        self.model_faster = WhisperModel(
+            model,
+            device=device,
+            compute_type=compute_type,
+        )
         self.language = language
 
         self.sample_rate = sample_rate

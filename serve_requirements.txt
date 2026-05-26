@@ -1,0 +1,5 @@
+# server
+numpy
+click<8.2
+webrtcvad
+faster-whisper

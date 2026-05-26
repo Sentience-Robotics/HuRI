@@ -176,6 +176,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Helm
+**/charts/*.tgz
+
 # Others
 .trash
 docs
