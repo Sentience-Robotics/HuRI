@@ -1,14 +1,16 @@
 import asyncio
 import os
 import re
-from dataclasses import dataclass
-from typing import AsyncGenerator, Optional
+import sys
+from typing import AsyncGenerator
 
 import numpy as np
 from ray import serve
 from ray.serve import handle
 
-from src.core.module import Module, ModuleWithHandle
+from src.core.module import ModuleWithHandle
+
+from .events import Audio, Token
 
 
 # Defaults — overridden by env vars in production (see README.md)
@@ -26,19 +28,6 @@ _SOFT_END_RE = re.compile(r'[,;:]\s+')
 _DONE = object()  # sentinel for exhausted sync generator
 
 
-@dataclass
-class Token:
-    text: str
-    end: bool  # True on the last token of an LLM stream
-
-
-@dataclass
-class Audio:
-    data: np.ndarray  # float32, values in [-1.0, 1.0]
-    sample_rate: int
-    end: bool = False  # True on the last chunk of an utterance
-
-
 @serve.deployment(name="TTS")
 class TTSDeployment:
     def __init__(
@@ -47,6 +36,12 @@ class TTSDeployment:
         voice_sample_path: str = _VOICE_SAMPLE_PATH,
         voice_sample_transcript: str = _VOICE_SAMPLE_TRANSCRIPT,
     ):
+        cosy_dir = os.environ.get("HURI_COSY_DIR")
+        if cosy_dir:
+            matcha_path = os.path.join(cosy_dir, "third_party", "Matcha-TTS")
+            if os.path.isdir(matcha_path) and matcha_path not in sys.path:
+                sys.path.insert(0, matcha_path)
+
         from cosyvoice.cli.cosyvoice import CosyVoice2
         from cosyvoice.utils.file_utils import load_wav
 
@@ -109,10 +104,10 @@ class TTS(ModuleWithHandle):
 
     def __init__(
         self,
-        handle: handle.DeploymentHandle,
+        _handle: handle.DeploymentHandle,
         min_clause_chars: int = 20,
     ):
-        super().__init__(handle)
+        super().__init__(_handle)
         self.min_clause_chars: int = min_clause_chars
         self._buffer: str = ""
 
@@ -125,16 +120,16 @@ class TTS(ModuleWithHandle):
             if not clause:
                 break
             self._buffer = remainder
-            async for chunk in self.handle.synthesize.remote(clause):
+            async for chunk in self._handle.synthesize.remote(clause):
                 yield chunk
 
         # Flush the remaining buffer when the LLM stream ends
         if token.end and self._buffer.strip():
-            async for chunk in self.handle.synthesize.remote(self._buffer.strip()):
+            async for chunk in self._handle.synthesize.remote(self._buffer.strip()):
                 yield chunk
             self._buffer = ""
         if token.end:
-            sample_rate = await self.handle.get_sample_rate.remote()
+            sample_rate = await self._handle.get_sample_rate.remote()
             yield Audio(data=np.array([], dtype=np.float32), sample_rate=sample_rate, end=True)
 
     def _split(self, text: str) -> tuple[str, str]:

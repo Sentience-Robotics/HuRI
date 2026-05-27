@@ -8,7 +8,7 @@ from ray import serve
 from ray.serve import handle
 
 from src.core.module import Module, ModuleWithHandle
-from src.modules.text_to_speech.text_to_speech import Audio
+from src.modules.text_to_speech.events import Audio
 
 
 _HF_REPO = os.environ.get("HURI_EMAGE_REPO", "H-Liu1997/emage_audio")
@@ -115,9 +115,9 @@ class Gesture(ModuleWithHandle):
 
     def __init__(
         self,
-        handle: handle.DeploymentHandle,
+        _handle: handle.DeploymentHandle,
     ):
-        super().__init__(handle)
+        super().__init__(_handle)
         self._chunks: list[np.ndarray] = []
 
     async def process(self, audio: Audio) -> AsyncGenerator[Motion, None]:  # type: ignore[override]
@@ -138,5 +138,5 @@ class Gesture(ModuleWithHandle):
         full_audio = np.concatenate(self._chunks)
         self._chunks = []
 
-        motion = await self.handle.infer.remote(full_audio)
+        motion = await self._handle.infer.remote(full_audio)
         yield motion

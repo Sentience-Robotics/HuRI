@@ -3,53 +3,80 @@ from typing import List, Optional
 
 import numpy as np
 from faster_whisper import WhisperModel
+from ray import serve
+from ray.serve import handle
 
-from src.core.module import Module
+from src.core.module import ModuleWithHandle
 
 from .events import Transcript, Voice
 
 
-class STT(Module):
-    """STT Module
+@serve.deployment(name="STT")
+class STTDeployment:
+    """Stateless Whisper inference actor.
 
-    Transcribe voice using Faster_Whisper.
-
-    input: voice,
-    output: transcript
-
-    :model: size of the model to use (tiny, tiny.en, base, base.en, small,
-        small.en, distil-small.en, medium, medium.en, distil-medium.en,
-        large-v1, large-v2, large-v3, large, distil-large-v2, distil-large-v3,
-        large-v3-turbo, or turbo).
-    :language: language spoken in the audio. It should be a language code such
-        as "en" or "fr".
-    :sample_rate: size of received voice audio. Usually 8000, 16000 or 48000.
-    :block_duration: size of received voice audio (in s).
+    Holds the faster-whisper model in a single Ray actor (pinned to the AMD
+    worker in deployment configs). Exposes a single transcribe() call so
+    per-session STT clients can offload the heavy work without owning a GPU.
     """
-
-    input_type = "voice"
-    output_type = "transcript"
 
     def __init__(
         self,
         model: str = "base",
-        language: str = "en",
         device: str = "auto",
         compute_type: str = "auto",
-        sample_rate: int = 16000,
-        block_duration: float = 0.020,  # s
-        transcribe_window: float = 2.0,  # s
-        transcribe_step: float = 1.0,  # s
     ):
-        super().__init__()
-
         self.model_faster = WhisperModel(
             model,
             device=device,
             compute_type=compute_type,
         )
-        self.language = language
+        self.language = "en"
 
+    async def transcribe(self, audio: np.ndarray) -> str:
+        loop = asyncio.get_running_loop()
+        segments, _ = await loop.run_in_executor(
+            None,
+            lambda: self.model_faster.transcribe(
+                audio,
+                language=self.language,
+                beam_size=1,
+            ),
+        )
+        return " ".join(seg.text for seg in segments).strip()
+
+
+class STT(ModuleWithHandle):
+    """STT Module
+
+    Per-session client: keeps the rolling window / silence state, offloads each
+    transcription window to the shared STTDeployment actor.
+
+    input: voice,
+    output: transcript
+
+    :sample_rate: size of received voice audio. Usually 8000, 16000 or 48000.
+    :block_duration: size of received voice audio (in s).
+    :transcribe_window: rolling window length (s) handed to Whisper.
+    :transcribe_step: stride (s) between successive windows.
+    """
+
+    _handle_cls = STTDeployment
+    input_type = "voice"
+    output_type = "transcript"
+
+    def __init__(
+        self,
+        _handle: handle.DeploymentHandle,
+        language: str = "en",
+        sample_rate: int = 16000,
+        block_duration: float = 0.020,  # s
+        transcribe_window: float = 2.0,  # s
+        transcribe_step: float = 1.0,  # s
+    ):
+        super().__init__(_handle=_handle)
+
+        self.language = language
         self.sample_rate = sample_rate
         self.window_size: int = int(transcribe_window / block_duration)
         self.step_size: int = int(transcribe_step / block_duration)
@@ -57,9 +84,6 @@ class STT(Module):
         self.buffer: List[np.ndarray] = []
 
         self.silence: bool = True
-
-        self.prev_text: str = ""
-        self.stable_text: str = ""
 
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
@@ -86,16 +110,9 @@ class STT(Module):
                 return None
             processing_chunks = self.buffer[: self.window_size]
 
-        self.pending_silence = False
         processing_audio = np.concatenate(processing_chunks, axis=0)
 
-        segments, _ = self.model_faster.transcribe(
-            processing_audio,
-            language=self.language,
-            beam_size=1,  # faster for realtime
-        )
-
-        current_text = " ".join([seg.text for seg in segments]).strip()
+        current_text: str = await self._handle.transcribe.remote(processing_audio)
 
         processed_size = self.window_size - self.step_size
         async with self.lock:
