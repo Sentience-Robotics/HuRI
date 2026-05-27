@@ -31,11 +31,32 @@ ray:
         runtime_env:
           env_vars:
             RAY_COLOR_PREFIX: "1"
+            HURI_RAG_VERIFY_SSL: "false"
         deployments:
+          # HuRI: FastAPI/WebSocket ingress + per-session router. CPU only —
+          # all GPU work is offloaded to handle-backed deployments below.
           - name: HuRI
             ray_actor_options:
               num_cpus: 1
               num_gpus: 0
+          # STT: shared faster-whisper actor, pinned to AMD.
+          - name: STT
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0.5
+              resources: {"GPU_TYPE_AMD": 0.5}
+          # RAG: embeddings (sentence-transformers) + LLM client. Pinned to AMD.
+          - name: RAGHandle
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0.5
+              resources: {"GPU_TYPE_AMD": 0.5}
+            init_kwargs:
+              qdrant_url: "https://qdrant.pommier.lan"
+              llm_url: "https://llm.pommier.lan"
+              embedding_model: "bge-large-en-v1.5-gguf-Q4_K_M"
           - name: TTS
             ray_actor_options:
               num_cpus: 1
@@ -98,7 +119,7 @@ workerGroups:
     replicas: 1
     minReplicas: 1
     maxReplicas: 1
-    mountVoiceAssets: false
+    mountVoiceAssets: true
     nodeSelector:
       gpu: nvidia
     # affinity: {}  # optional
@@ -134,7 +155,7 @@ workerGroups:
     replicas: 1
     minReplicas: 1
     maxReplicas: 1
-    mountVoiceAssets: true
+    mountVoiceAssets: false
     nodeSelector:
       gpu: amd
     # affinity: {}  # optional
@@ -214,6 +235,8 @@ models:
     # HURI_MODEL_PATH must match mountPath/modelId (see text_to_speech.py).
     env:
       HURI_MODEL_PATH: /models/cosytts/iic/CosyVoice2-0.5B
+      # Path to the CosyVoice repo root containing third_party/Matcha-TTS.
+      HURI_COSY_DIR: /app/cosyvoice
 
   emage:
     enabled: true
@@ -248,7 +271,7 @@ voiceAssets:
   mountPath: /assets
   env:
     HURI_VOICE_SAMPLE_PATH: /assets/voice.wav
-    HURI_VOICE_TRANSCRIPT: "Hello, this is my voice sample for cloning."
+    HURI_VOICE_TRANSCRIPT: "Instinct creates its own oppressors and bids us rise up against them."
 
 # Ingress for the Ray Serve endpoint (port 8000).
 ingress:

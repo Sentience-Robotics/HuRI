@@ -119,6 +119,17 @@ spec:
                 image: {{ $.Values.image.repository }}:{{ $.Values.image.tag }}
                 {{- end }}
                 imagePullPolicy: {{ $.Values.image.pullPolicy }}
+                readinessProbe:
+                  exec:
+                    command:
+                      - bash
+                      - -c
+                      - wget --tries 1 -T 2 -q -O- http://localhost:52365/api/local_raylet_healthz
+                        | grep success
+                  initialDelaySeconds: 10
+                  periodSeconds: 5
+                  failureThreshold: 10
+                  timeoutSeconds: 5
                 env:
                   {{- $hasEnv := false }}
                   {{- if .containerEnv }}
