@@ -70,4 +70,10 @@ USER ray
 
 # 4. faster-whisper
 RUN pip install --no-cache-dir faster-whisper
+
+# 5. RAG / LLM extras (httpx, qdrant-client, sentence-transformers, …)
+#    Installed last so the ROCm torch wheel installed above is the resolved one.
+COPY requirements-amd.txt /app
+RUN pip install --no-cache-dir -r requirements-amd.txt
+
 COPY src /app/src
