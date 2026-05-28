@@ -4,7 +4,7 @@
 
 HuRI is an open-source research project focused on conversational AI for humanoid robots and virtual avatars.
 HuRI provides a modular architecture that allows developers to design, implement, and run AI modules within customizable conversational pipelines defined by the user.
-HuRI is launched as a multi-client server, to handle multiple client (robots) conversationnal requests.
+HuRI is launched as a multi-client server, to handle multiple client (robots) conversational requests.
 The framework supports the implementation and integration of multiple AI modules, including:
 Speech-to-Text (STT) and Text-to-Speech (TTS), Retrieval-Augmented Generation (RAG), Emotional analysis (EMO), Motion and gesture generation (MOV)
 
@@ -85,4 +85,4 @@ utils: utility modules, like Sender (send event to Clients)
 
 ## Developper Documentation
 
-HuRI's complete documentation is available [here](https://docs.sentience-robotics.fr/s/pub/p/hu-ri-documentation-f4amcndYQg).
+HuRI's complete documentation is available [here](https://docs.sentience-robotics.fr/share/p1x9ikjkhf/p/hu-ri-documentation-f4amcndYQg).
