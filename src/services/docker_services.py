@@ -1,6 +1,7 @@
 import socket
 import subprocess
 import time
+import json
 from typing import Any
 
 import httpx
@@ -119,17 +120,68 @@ timeout on port {self.port}")
         print(f"[OllamaService] Ready! \
 container='{self.container_name}', port={self.port}, model='{model}'")
 
+
     async def generate(
         self,
         messages: list,
         max_tokens: int = 1024,
         temperature: float = 0.1,
-    ) -> Any:
+        stream: bool = False,
+    ):
         """
-        Send messages to Ollama and return the response.
-        This is what RAGHandle calls to get LLM answers.
+        Dispatcher:
+        stream=True  -> delegates to generate_stream (yields tokens)
+        stream=False -> delegates to generate_paragraphs (yields paragraphs)
         """
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        if stream:
+            async for token in self.generate_stream(messages, max_tokens, temperature):
+                yield token
+        else:
+            async for paragraph in self.generate_paragraphs(messages, max_tokens, temperature):
+                yield paragraph
+
+
+    async def generate_stream(
+        self,
+        messages: list,
+        max_tokens: int = 1024,
+        temperature: float = 0.1,
+    ):
+        """Stream=True. Yields individual tokens."""
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": True,
+                    "options": {
+                        "num_predict": max_tokens,
+                        "temperature": temperature,
+                    },
+                },
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    token = chunk.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if chunk.get("done", False):
+                        return
+
+
+    async def generate_paragraphs(
+        self,
+        messages: list,
+        max_tokens: int = 1024,
+        temperature: float = 0.1,
+    ):
+        """Stream=False. Gets full response, then yields paragraphs."""
+        async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{self.base_url}/api/chat",
                 json={
@@ -143,7 +195,13 @@ container='{self.container_name}', port={self.port}, model='{model}'")
                 },
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"]
+            full_text = resp.json()["message"]["content"]
+
+        for paragraph in full_text.split("\n\n"):
+            paragraph = paragraph.strip()
+            if paragraph:
+                yield paragraph
+
 
     async def health(self) -> dict:
         """Check if this Ollama instance is alive."""

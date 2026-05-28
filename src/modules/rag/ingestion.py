@@ -1,5 +1,4 @@
 import argparse
-import os
 import re
 import sys
 import uuid
@@ -17,10 +16,10 @@ from qdrant_client.models import (
     PointStruct,
     VectorParams,
 )
-from semantic_chunker import SemanticChunker
 from sentence_transformers import SentenceTransformer
 
-USER_ID_FILE = os.path.expanduser("~/.huri_user_id")
+from src.core.user_config import get_or_create_user_id
+from src.modules.rag.semantic_chunker import SemanticChunker
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -89,21 +88,6 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     sys.exit(1)
 
 
-def get_user_id(provided_id: str | None = None) -> str:
-    if provided_id:
-        return provided_id
-    if os.path.exists(USER_ID_FILE):
-        with open(USER_ID_FILE) as f:
-            uid = f.read().strip()
-            if uid:
-                return uid
-    new_id = str(uuid.uuid4())
-    with open(USER_ID_FILE, "w") as f:
-        f.write(new_id)
-    print(f"Generated new user_id: {new_id}")
-    return new_id
-
-
 def ensure_collection(client: QdrantClient, collection: str, vector_size: int):
     collections = [c.name for c in client.get_collections().collections]
     if collection not in collections:
@@ -145,7 +129,6 @@ def ingest_chunks(
         )
 
     if points:
-        # Upsert in batches of 100
         batch_size = 100
         for i in range(0, len(points), batch_size):
             batch = points[i : i + batch_size]
@@ -403,7 +386,7 @@ def main():
 
     args = parser.parse_args()
 
-    _user_id = get_user_id(args._user_id)
+    _user_id = get_or_create_user_id()
     print(f"User: {_user_id}")
 
     client = QdrantClient(url=args.qdrant_url)
@@ -440,7 +423,7 @@ if __name__ == "__main__":
         # Ingest a text file
         python ingestion.py text notes.txt story.md
 
-        # Specify a user ID (otherwise reads from ~/.huri_user_id)
+        # Specify a user ID (otherwise it will be auto-generated and saved)
         python ingestion.py --user-id "abc-123" pdf report.pdf
 
         # Use a different collection
