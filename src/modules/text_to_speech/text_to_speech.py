@@ -1,7 +1,9 @@
 import asyncio
+import logging
 import os
-import re
+import queue
 import sys
+import uuid
 from typing import AsyncGenerator
 
 import numpy as np
@@ -12,6 +14,19 @@ from src.core.module import ModuleWithHandle
 
 from .events import Audio, Token
 
+logger = logging.getLogger("ray.serve")
+logger.setLevel(os.environ.get("HURI_TTS_LOG_LEVEL", "INFO").upper())
+
+
+def _trace(msg: str) -> None:
+    """Belt-and-braces log: hits both the ray.serve logger AND stdout.
+
+    Ray Serve captures stdout per replica and surfaces it in the dashboard's
+    Logs tab — that's the path that survives any logger misconfiguration.
+    """
+    logger.info(msg)
+    print(f"[TTS] {msg}", flush=True)
+
 
 # Defaults — overridden by env vars in production (see README.md)
 _MODEL_PATH = os.environ.get("HURI_MODEL_PATH", "/models/cosytts/iic/CosyVoice2-0.5B")
@@ -20,132 +35,198 @@ _VOICE_SAMPLE_TRANSCRIPT = os.environ.get(
     "HURI_VOICE_TRANSCRIPT", "Hello, this is my voice sample for cloning."
 )
 
-# Hard endings (.!?) trigger synthesis immediately; soft endings (,;:) only after
-# min_clause_chars are buffered, to avoid synthesizing very short fragments.
-_HARD_END_RE = re.compile(r'[.!?]["\']?\s+')
-_SOFT_END_RE = re.compile(r'[,;:]\s+')
-
-_DONE = object()  # sentinel for exhausted sync generator
+_END_TEXT = object()   # sentinel pushed into the text queue to close synth
+_END_AUDIO = object()  # sentinel pushed into the audio queue when synth completes
+_DONE = object()       # sentinel for exhausted sync generator
 
 
-@serve.deployment(name="TTS")
+@serve.deployment(name="TTS", max_ongoing_requests=200)
 class TTSDeployment:
+    """CosyVoice2 wrapper with per-session bistream synthesis.
+
+    The model's `inference_zero_shot` accepts a Python generator as `tts_text`
+    and yields audio chunks as text arrives — that's the "bistream" mode.
+    Because the model call is fully synchronous, each session runs in a thread
+    via `run_in_executor` and is fed by a thread-safe `queue.Queue` that the
+    asyncio side pushes text into.
+    """
+
     def __init__(
         self,
         model_path: str = _MODEL_PATH,
         voice_sample_path: str = _VOICE_SAMPLE_PATH,
         voice_sample_transcript: str = _VOICE_SAMPLE_TRANSCRIPT,
     ):
+        _trace(f"TTSDeployment init: model_path={model_path} voice={voice_sample_path}")
+
         cosy_dir = os.environ.get("HURI_COSY_DIR")
         if cosy_dir:
             matcha_path = os.path.join(cosy_dir, "third_party", "Matcha-TTS")
             if os.path.isdir(matcha_path) and matcha_path not in sys.path:
                 sys.path.insert(0, matcha_path)
+                logger.debug("Added Matcha-TTS path to sys.path: %s", matcha_path)
 
         from cosyvoice.cli.cosyvoice import CosyVoice2
-        from cosyvoice.utils.file_utils import load_wav
 
         self.model = CosyVoice2(model_path, load_jit=False, load_trt=False)
         self.sample_rate: int = self.model.sample_rate
+        _trace(f"CosyVoice2 loaded (sample_rate={self.sample_rate})")
 
-        self.prompt_speech = load_wav(voice_sample_path, 16000)
+        self.prompt_speech = voice_sample_path
         self.prompt_text: str = voice_sample_transcript
 
-    async def synthesize(self, text: str) -> AsyncGenerator[Audio, None]:
-        """Run CosyVoice2 streaming inference and yield Audio chunks.
-
-        The synchronous CosyVoice2 generator runs in a thread-pool executor so
-        it does not block the asyncio event loop between chunks.
-        """
-        loop = asyncio.get_running_loop()
-        gen = self.model.inference_zero_shot(
-            text,
-            self.prompt_text,
-            self.prompt_speech,
-            stream=True,
-        )
-        while True:
-            result = await loop.run_in_executor(None, next, gen, _DONE)
-            if result is _DONE:
-                break
-            yield Audio(
-                data=result["tts_speech"].squeeze(0).numpy().astype(np.float32),
-                sample_rate=self.sample_rate,
-            )
+        self._text_queues: dict[str, queue.Queue] = {}
 
     async def get_sample_rate(self) -> int:
         return self.sample_rate
 
+    async def start_session(self, session_id: str) -> None:
+        self._text_queues[session_id] = queue.Queue()
+        _trace(f"[{session_id}] session started (active={len(self._text_queues)})")
+
+    async def push_text(self, session_id: str, text: str, end: bool) -> None:
+        q = self._text_queues.get(session_id)
+        if q is None:
+            _trace(f"[{session_id}] WARNING push_text on unknown session (text={text!r} end={end})")
+            return
+        if text:
+            q.put(text)
+            _trace(f"[{session_id}] push_text {text!r} (qsize={q.qsize()})")
+        if end:
+            q.put(_END_TEXT)
+            _trace(f"[{session_id}] push_text: end-of-stream sentinel")
+
+    async def stream_audio(self, session_id: str) -> AsyncGenerator[Audio, None]:
+        text_q = self._text_queues[session_id]
+        loop = asyncio.get_running_loop()
+        chunk_count = 0
+        _trace(f"[{session_id}] stream_audio: starting CosyVoice inference")
+
+        def text_gen():
+            while True:
+                item = text_q.get()
+                if item is _END_TEXT:
+                    _trace(f"[{session_id}] text_gen: received end sentinel")
+                    return
+                _trace(f"[{session_id}] text_gen yielding: {item!r}")
+                yield item
+
+        try:
+            audio_iter = self.model.inference_zero_shot(
+                text_gen(),
+                self.prompt_text,
+                self.prompt_speech,
+                stream=True,
+            )
+            while True:
+                result = await loop.run_in_executor(None, next, audio_iter, _DONE)
+                if result is _DONE:
+                    break
+                assert isinstance(result, dict)
+                chunk_count += 1
+                speech = result["tts_speech"].squeeze(0).numpy().astype(np.float32)
+                _trace(
+                    f"[{session_id}] audio chunk #{chunk_count}: "
+                    f"{speech.shape[0]} samples (~{speech.shape[0] / self.sample_rate:.2f}s)"
+                )
+                yield Audio(data=speech, sample_rate=self.sample_rate)
+        except Exception as e:
+            _trace(f"[{session_id}] stream_audio FAILED: {e!r}")
+            logger.exception("[%s] stream_audio failed", session_id)
+            raise
+        finally:
+            self._text_queues.pop(session_id, None)
+            _trace(f"[{session_id}] stream_audio finished (chunks={chunk_count})")
+
 
 class TTS(ModuleWithHandle):
-    """TTS Module
+    """TTS Module — bistream tokens-in / audio-out via CosyVoice2.
 
-    Stream text tokens in, stream audio chunks out using CosyVoice2 zero-shot
-    voice cloning.
+    Opens one synthesis session per utterance (delimited by `token.end`). Each
+    incoming token is pushed straight into the model's text generator so audio
+    starts coming back before the LLM has finished producing the response.
+    No clause buffering on our side — CosyVoice's frontend handles segmentation
+    and stitches LM calls together across the whole utterance.
 
-    Buffers incoming tokens and synthesizes as soon as a sentence or clause
-    boundary is detected. Audio chunks are yielded immediately as CosyVoice2
-    produces them, so playback can start before synthesis is complete.
-
-    Compatible with both the Ray Serve event graph (async generator support in
-    EventGraph._run) and direct client streaming.
-
-    input: token (Token),
+    input: token (Token)
     output: audio (Audio)
-
-    :min_clause_chars: minimum buffer length before a soft boundary (,;:)
-        triggers synthesis. Hard endings (.!?) always trigger immediately.
-        Raise this value to produce longer, more natural-sounding segments.
     """
 
     _handle_cls = TTSDeployment
     input_type = "token"
     output_type = "audio"
 
-    def __init__(
-        self,
-        _handle: handle.DeploymentHandle,
-        min_clause_chars: int = 20,
-    ):
+    def __init__(self, _handle: handle.DeploymentHandle):
         super().__init__(_handle)
-        self.min_clause_chars: int = min_clause_chars
-        self._buffer: str = ""
+        self._session_id: str | None = None
+        self._audio_q: asyncio.Queue | None = None
+        self._stream_task: asyncio.Task | None = None
+        self._session_ready: asyncio.Event | None = None
 
     async def process(self, token: Token) -> AsyncGenerator[Audio, None]:  # type: ignore[override]
-        self._buffer += token.text
+        # Subsequent tokens within an utterance just push text — the first
+        # token's invocation is the long-running yielder that emits chunks as
+        # soon as CosyVoice produces them, decoupled from token arrival.
+        if self._session_id is not None:
+            sid = self._session_id
+            ready = self._session_ready
+            if ready is not None:
+                await ready.wait()
+            print(f"[TTS-client] [{sid}] push token: {token.text!r} (end={token.end})", flush=True)
+            await self._handle.push_text.remote(sid, token.text, token.end)
+            return
 
-        # Drain all complete clauses from the buffer before waiting for more tokens
-        while True:
-            clause, remainder = self._split(self._buffer)
-            if not clause:
-                break
-            self._buffer = remainder
-            async for chunk in self._handle.synthesize.remote(clause):
-                yield chunk
+        self._session_id = str(uuid.uuid4())
+        self._session_ready = asyncio.Event()
+        sid = self._session_id
+        audio_q: asyncio.Queue = asyncio.Queue()
+        self._audio_q = audio_q
+        print(f"[TTS-client] [{sid}] opening new utterance session", flush=True)
+        await self._handle.start_session.remote(sid)
+        self._stream_task = asyncio.create_task(self._drain_audio(sid, audio_q))
+        self._session_ready.set()
 
-        # Flush the remaining buffer when the LLM stream ends
-        if token.end and self._buffer.strip():
-            async for chunk in self._handle.synthesize.remote(self._buffer.strip()):
-                yield chunk
-            self._buffer = ""
-        if token.end:
+        print(f"[TTS-client] [{sid}] push token: {token.text!r} (end={token.end})", flush=True)
+        await self._handle.push_text.remote(sid, token.text, token.end)
+
+        try:
+            count = 0
+            while True:
+                item = await audio_q.get()
+                if item is _END_AUDIO:
+                    break
+                count += 1
+                print(f"[TTS-client] [{sid}] yield chunk #{count}", flush=True)
+                yield item
+            await self._stream_task
+            print(f"[TTS-client] [{sid}] utterance complete ({count} chunks)", flush=True)
+
             sample_rate = await self._handle.get_sample_rate.remote()
             yield Audio(data=np.array([], dtype=np.float32), sample_rate=sample_rate, end=True)
+        finally:
+            self._session_id = None
+            self._audio_q = None
+            self._stream_task = None
+            self._session_ready = None
 
-    def _split(self, text: str) -> tuple[str, str]:
-        """Return (clause_to_synthesize, remaining_buffer).
-
-        Splits on the first hard sentence ending (.!?) unconditionally, or on
-        the first soft clause ending (,;:) once the buffer is long enough.
-        Returns ("", text) when no boundary is found.
-        """
-        m = _HARD_END_RE.search(text)
-        if m:
-            return text[: m.end()].strip(), text[m.end() :]
-
-        if len(text) >= self.min_clause_chars:
-            m = _SOFT_END_RE.search(text)
-            if m:
-                return text[: m.end()].strip(), text[m.end() :]
-
-        return "", text
+    async def _drain_audio(self, session_id: str, audio_q: asyncio.Queue) -> None:
+        try:
+            response = self._handle.options(stream=True).stream_audio.remote(session_id)
+            count = 0
+            pts = 0.0
+            async for audio in response:  # type: ignore[attr-defined]
+                count += 1
+                audio.pts = pts
+                pts += audio.data.shape[0] / audio.sample_rate
+                print(
+                    f"[TTS-client] [{session_id}] drain received chunk #{count} "
+                    f"pts={audio.pts:.3f}s next={pts:.3f}s",
+                    flush=True,
+                )
+                await audio_q.put(audio)
+        except Exception as e:
+            print(f"[TTS-client] [{session_id}] drain task FAILED: {e!r}", flush=True)
+            raise
+        finally:
+            await audio_q.put(_END_AUDIO)
+            print(f"[TTS-client] [{session_id}] drain task finished", flush=True)
