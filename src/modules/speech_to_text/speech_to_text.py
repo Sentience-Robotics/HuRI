@@ -1,14 +1,16 @@
 import asyncio
+import os
 from typing import List, Optional
 
 import numpy as np
-from faster_whisper import WhisperModel
 from ray import serve
 from ray.serve import handle
 
 from src.core.module import ModuleWithHandle
 
 from .events import Transcript, Voice
+
+_MODEL_PATH = os.environ.get("HURI_STT_MODEL_PATH", "base")
 
 
 @serve.deployment(name="STT")
@@ -18,19 +20,27 @@ class STTDeployment:
     Holds the faster-whisper model in a single Ray actor (pinned to the AMD
     worker in deployment configs). Exposes a single transcribe() call so
     per-session STT clients can offload the heavy work without owning a GPU.
+
+    HURI_STT_MODEL_PATH: path to a local faster-whisper model directory (from
+    the whisper PVC). Falls back to "base" which triggers a HuggingFace
+    download — only acceptable for local dev without a PVC.
     """
 
     def __init__(
         self,
-        model: str = "base",
+        model: str = _MODEL_PATH,
         device: str = "auto",
         compute_type: str = "auto",
     ):
+        print(f"[STT] loading model from {model!r} (device={device} compute_type={compute_type})", flush=True)
+        from faster_whisper import WhisperModel
+
         self.model_faster = WhisperModel(
             model,
             device=device,
             compute_type=compute_type,
         )
+        print(f"[STT] model loaded", flush=True)
         self.language = "en"
 
     async def transcribe(self, audio: np.ndarray) -> str:

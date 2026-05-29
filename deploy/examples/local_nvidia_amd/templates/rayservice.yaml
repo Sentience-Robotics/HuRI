@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "huri.labels" . | nindent 4 }}
   annotations:
-    ray.io/initializing-timeout: "10m"
+    ray.io/initializing-timeout: "20m"
 spec:
   serveConfigV2: |
 {{ .Values.ray.serveConfig | indent 4 }}
@@ -98,6 +98,12 @@ spec:
                 emptyDir:
                   medium: Memory
                   sizeLimit: {{ .shmSize | default "1Gi" }}
+              {{- if .cudaCacheHostPath }}
+              - name: cuda-cache
+                hostPath:
+                  path: {{ .cudaCacheHostPath }}
+                  type: DirectoryOrCreate
+              {{- end }}
               {{- range .mountedModels }}
               {{- $model := index $.Values.models . }}
               {{- if $model.enabled }}
@@ -166,6 +172,10 @@ spec:
                 volumeMounts:
                   - name: dshm
                     mountPath: /dev/shm
+                  {{- if .cudaCacheHostPath }}
+                  - name: cuda-cache
+                    mountPath: /home/ray/.nv
+                  {{- end }}
                   {{- range .mountedModels }}
                   {{- $model := index $.Values.models . }}
                   {{- if $model.enabled }}
