@@ -25,8 +25,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                # KubeRay creates <rayservice-name>-head-svc for the head node.
-                name: {{ include "huri.headSvcName" . }}
+                name: {{ include "huri.headDashboardSvcName" . }}
                 port:
                   number: 8265
 {{- end }}

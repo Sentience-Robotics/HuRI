@@ -62,3 +62,11 @@ KubeRay appends "-head-svc" to the RayService name.
 {{- define "huri.headSvcName" -}}
 {{- printf "%s-head-svc" (include "huri.fullname" .) }}
 {{- end }}
+
+{{/*
+Name of the stable dashboard service managed by this chart.
+Selects the head pod via stable labels, avoiding KubeRay's random-suffix service.
+*/}}
+{{- define "huri.headDashboardSvcName" -}}
+{{- printf "%s-head-dashboard-svc" (include "huri.fullname" .) }}
+{{- end }}
