@@ -1,14 +1,28 @@
 import json
-import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 
+from pydantic import BaseModel
 from ray import serve
 from ray.serve import handle
 
 from src.core.module import ModuleWithHandle, ModuleWithId
 from src.modules.speech_to_text.events import Sentence
 from src.modules.text_to_speech.events import Token
+
+
+class RAGDeploymentConfig(BaseModel):
+    qdrant_url: str = "http://localhost:6333"
+    default_collection: str = "documents"
+    embedding_model: str = "BAAI/bge-large-en-v1.5"
+    embedding_url: str = ""
+    llm_provider: str = "ollama"  # "vllm", "ollama", "api"
+    llm_url: str = "http://localhost:11434"
+    llm_model: str = "mistral:7b"
+    llm_api_key: str = ""
+    verify_ssl: bool = True
+    top_k: int = 5
+    score_threshold: float = 0.5
 
 
 @dataclass
@@ -24,49 +38,52 @@ class RAGQuery:
 class RAGHandle:
     """Stateless RAG processor. Streams LLM tokens to the caller."""
 
-    def __init__(
-        self,
-        qdrant_url: str = "http://localhost:6333",
-        default_collection: str = "documents",
-        embedding_model: str = "BAAI/bge-large-en-v1.5",
-        llm_provider: str = "ollama",  # "vllm", "ollama", "api"
-        llm_url: str = "http://localhost:11434",
-        llm_model: str = "mistral:7b",
-        llm_api_key: str = "",
-        top_k: int = 5,
-        score_threshold: float = 0.5,
-    ):
-        from sentence_transformers import SentenceTransformer
+    def __init__(self, **kwargs):
+        self._cfg = RAGDeploymentConfig(**kwargs)
+        self._apply_config()
 
-        self.embed_model = SentenceTransformer(embedding_model)
-        self.default_collection = default_collection
-        self.top_k = top_k
-        self.score_threshold = score_threshold
+    def reconfigure(self, config: dict) -> None:
+        self._cfg = RAGDeploymentConfig(**{**self._cfg.model_dump(), **config})
+        self._apply_config()
 
-        self.llm_provider = llm_provider
-        self.llm_url = llm_url
-        self.llm_model = llm_model
-        self.llm_api_key = llm_api_key
+    def _apply_config(self) -> None:
+        import httpx
+        from qdrant_client import QdrantClient
 
-        self._qdrant_url = qdrant_url
-        self._qdrant: Any = None
-        self._verify_ssl = os.environ.get("HURI_RAG_VERIFY_SSL", "true").lower() != "false"
-
-    async def _get_qdrant(self):
-        if self._qdrant is None:
-            from qdrant_client import QdrantClient
-
-            self._qdrant = QdrantClient(url=self._qdrant_url, verify=self._verify_ssl)
-            print(f"[RAGHandle] Connected to Qdrant at {self._qdrant_url}")
-        return self._qdrant
+        cfg = self._cfg
+        self.embedding_url = cfg.embedding_url or cfg.llm_url
+        self._qdrant = QdrantClient(url=cfg.qdrant_url, verify=cfg.verify_ssl)
+        print(f"[RAGHandle] Connected to Qdrant at {cfg.qdrant_url}")
+        self._embed_client = httpx.AsyncClient(timeout=30.0, verify=cfg.verify_ssl)
+        self._llm_client = httpx.AsyncClient(timeout=120.0, verify=cfg.verify_ssl)
 
     def _resolve_user_context(self, _user_id: str) -> tuple[str, dict | None]:
-        collection = self.default_collection
+        collection = self._cfg.default_collection
         filters = {"_user_id": _user_id}
         return collection, filters
 
-    def _embed(self, text) -> list[float] | Any:
-        return self.embed_model.encode(str(text), normalize_embeddings=True).tolist()
+    async def _embed(self, text: str) -> list[float]:
+        url = f"{self.embedding_url}/v1/embeddings"
+        resp = await self._embed_client.post(
+            url,
+            json={"model": self._cfg.embedding_model, "input": str(text)},
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Embedding HTTP {resp.status_code} from {url}: {resp.text[:1000]}"
+            )
+        try:
+            payload = resp.json()
+        except Exception as e:
+            raise RuntimeError(
+                f"Embedding non-JSON response from {url}: {resp.text[:1000]}"
+            ) from e
+        try:
+            return payload["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise RuntimeError(
+                f"Embedding unexpected schema from {url}: {str(payload)[:1000]}"
+            ) from e
 
     def _search(
         self,
@@ -90,8 +107,8 @@ class RAGHandle:
                 collection_name=collection,
                 query=query_vector,
                 query_filter=qdrant_filter,
-                limit=self.top_k,
-                score_threshold=self.score_threshold,
+                limit=self._cfg.top_k,
+                score_threshold=self._cfg.score_threshold,
             ).points
         except Exception:
             results = []
@@ -153,14 +170,11 @@ class RAGHandle:
     async def _stream_ollama(
         self, messages: list, max_tokens: int
     ) -> AsyncGenerator[str, None]:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=120.0, verify=self._verify_ssl) as client:
-            async with client.stream(
+        async with self._llm_client.stream(
                 "POST",
-                f"{self.llm_url}/api/chat",
+                f"{self._cfg.llm_url}/api/chat",
                 json={
-                    "model": self.llm_model,
+                    "model": self._cfg.llm_model,
                     "messages": messages,
                     "stream": True,
                     "options": {"num_predict": max_tokens, "temperature": 0.1},
@@ -187,18 +201,15 @@ class RAGHandle:
         max_tokens: int,
         api_key: str = "",
     ) -> AsyncGenerator[str, None]:
-        import httpx
-
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        async with httpx.AsyncClient(timeout=120.0, verify=self._verify_ssl) as client:
-            async with client.stream(
+        async with self._llm_client.stream(
                 "POST",
                 url,
                 headers=headers,
                 json={
-                    "model": self.llm_model,
+                    "model": self._cfg.llm_model,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": 0.1,
@@ -236,43 +247,54 @@ class RAGHandle:
             {"role": "user", "content": user_prompt},
         ]
 
-        if self.llm_provider == "vllm":
+        if self._cfg.llm_provider == "vllm":
             async for d in self._stream_openai_compatible(
-                f"{self.llm_url}/v1/chat/completions", messages, max_tokens
+                f"{self._cfg.llm_url}/v1/chat/completions", messages, max_tokens
             ):
                 yield d
-        elif self.llm_provider == "api":
+        elif self._cfg.llm_provider == "api":
             async for d in self._stream_openai_compatible(
-                f"{self.llm_url}/v1/chat/completions",
+                f"{self._cfg.llm_url}/v1/chat/completions",
                 messages,
                 max_tokens,
-                self.llm_api_key,
+                self._cfg.llm_api_key,
             ):
                 yield d
-        elif self.llm_provider == "ollama":
+        elif self._cfg.llm_provider == "ollama":
             async for d in self._stream_ollama(messages, max_tokens):
                 yield d
         else:
-            raise ValueError(f"Unknown llm_provider: {self.llm_provider}")
+            raise ValueError(f"Unknown llm_provider: {self._cfg.llm_provider}")
 
     async def stream(self, query: RAGQuery) -> AsyncGenerator[str, None]:
         """Main streaming entry point — yields LLM text deltas."""
+        import traceback
+
         print(f"[RAG] Question: {query.question}")
 
-        qdrant = await self._get_qdrant()
         collection, filters = self._resolve_user_context(query._user_id)
-        query_vector = self._embed(query.question)
-        chunks = self._search(qdrant, query_vector, collection, filters)
+        query_vector = await self._embed(query.question)
+
+        try:
+            chunks = self._search(self._qdrant, query_vector, collection, filters)
+        except Exception:
+            print(f"[RAG] FAILED during Qdrant search:\n{traceback.format_exc()}")
+            raise
 
         print(f"[RAG] Found {len(chunks)} chunks")
         system_prompt, user_prompt = self._build_prompt(
             query.question, chunks, query.preferences
         )
 
-        async for delta in self._llm_stream(
-            system_prompt, user_prompt, query.preferences
-        ):
-            yield delta
+        print(f"[RAG] Streaming from LLM at {self._cfg.llm_url} (provider={self._cfg.llm_provider}, model={self._cfg.llm_model})")
+        try:
+            async for delta in self._llm_stream(
+                system_prompt, user_prompt, query.preferences
+            ):
+                yield delta
+        except Exception:
+            print(f"[RAG] FAILED during LLM stream:\n{traceback.format_exc()}")
+            raise
 
 
 class RAG(ModuleWithHandle, ModuleWithId):
