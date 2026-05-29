@@ -16,3 +16,4 @@ class Audio(EventData):
     data: np.ndarray
     sample_rate: int
     end: bool = False
+    pts: float = 0.0  # presentation timestamp in seconds from utterance start

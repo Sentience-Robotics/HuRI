@@ -35,11 +35,32 @@ class Client:
             f.write(_user_id)
 
     async def _receive_loop(self, ws: websockets.ClientConnection):
+        import struct
         try:
             while True:
-                text = await ws.recv()
-                print("<<", text)
-                await asyncio.sleep(0.1)
+                msg = await ws.recv()
+                if isinstance(msg, bytes):
+                    if len(msg) < 2:
+                        print(f"<< bytes ({len(msg)}B, no topic)")
+                        continue
+                    (topic_len,) = struct.unpack(">H", msg[:2])
+                    topic = msg[2:2 + topic_len].decode()
+                    payload = msg[2 + topic_len:]
+
+                    if topic == "audio" and len(payload) >= 13:
+                        sample_rate, end_flag, pts = struct.unpack(">IBd", payload[:13])
+                        n_samples = (len(payload) - 13) // 4
+                        print(
+                            f"<< audio: pts={pts:.3f}s samples={n_samples} @ {sample_rate}Hz "
+                            f"end={bool(end_flag)}"
+                        )
+                    elif topic == "motion" and len(payload) >= 16:
+                        pts, fps, n_frames = struct.unpack(">dII", payload[:16])
+                        print(f"<< motion: pts={pts:.3f}s frames={n_frames} @ {fps}fps")
+                    else:
+                        print(f"<< {topic}: bytes ({len(payload)}B)")
+                else:
+                    print("<<", msg)
 
         except (asyncio.CancelledError, websockets.ConnectionClosedOK):
             pass

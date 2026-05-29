@@ -21,6 +21,7 @@ class Motion:
     expressions: np.ndarray  # (t, 100)  facial expression coefficients
     trans: np.ndarray        # (t, 3)    global root translation
     fps: int = 30
+    pts: float = 0.0         # presentation timestamp in seconds, paired with Audio.pts
 
 
 @serve.deployment(name="GestureGeneration")
@@ -30,17 +31,25 @@ class GestureDeployment:
         hf_repo: str = _HF_REPO,
         device: Optional[str] = None,
     ):
+        print(f"[Gesture] importing torch...", flush=True)
         import torch
+        print(f"[Gesture] importing emage...", flush=True)
         from .emage import EmageAudioModel, EmageVAEConv, EmageVQModel, EmageVQVAEConv
 
         self.device = torch.device(
             device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         )
+        print(f"[Gesture] device={self.device} hf_repo={hf_repo!r}", flush=True)
 
+        print("[Gesture] loading face_vq...", flush=True)
         face_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/face").to(self.device)
+        print("[Gesture] loading upper_vq...", flush=True)
         upper_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/upper").to(self.device)
+        print("[Gesture] loading lower_vq...", flush=True)
         lower_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/lower").to(self.device)
+        print("[Gesture] loading hands_vq...", flush=True)
         hands_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/hands").to(self.device)
+        print("[Gesture] loading global_ae...", flush=True)
         global_ae = EmageVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/global").to(self.device)
 
         self.motion_vq = EmageVQModel(
@@ -52,12 +61,18 @@ class GestureDeployment:
         )
         self.motion_vq.eval()
 
+        print("[Gesture] loading EmageAudioModel...", flush=True)
         self.model = EmageAudioModel.from_pretrained(hf_repo).to(self.device)
         self.model.eval()
+        print(f"[Gesture] ready", flush=True)
 
-    def infer(self, audio_np: np.ndarray) -> Motion:
+    def infer(self, audio_np: np.ndarray, source_sr: int = _EMAGE_SR) -> Motion:
         import torch
         import torch.nn.functional as F
+
+        if source_sr != _EMAGE_SR:
+            import librosa
+            audio_np = librosa.resample(audio_np, orig_sr=source_sr, target_sr=_EMAGE_SR)
 
         audio_ts = torch.from_numpy(audio_np).to(self.device).unsqueeze(0)
         speaker_id = torch.zeros(1, 1, dtype=torch.long, device=self.device)
@@ -96,11 +111,9 @@ class Gesture(ModuleWithHandle):
     """Gesture Module
 
     Consumes streaming Audio chunks produced by TTS and generates whole-body
-    SMPL-X motion using the EMAGE audio-to-gesture model.
-
-    Audio chunks are buffered until TTS signals the end of an utterance
-    (Audio.end == True). At that point the full waveform is passed to EMAGE
-    and a single Motion object is yielded.
+    SMPL-X motion using the EMAGE audio-to-gesture model. Inference runs once
+    per chunk so Motion events interleave with audio playback instead of all
+    arriving at the end of the utterance.
 
     input:  audio (Audio)
     output: motion (Motion)
@@ -118,25 +131,12 @@ class Gesture(ModuleWithHandle):
         _handle: handle.DeploymentHandle,
     ):
         super().__init__(_handle)
-        self._chunks: list[np.ndarray] = []
 
     async def process(self, audio: Audio) -> AsyncGenerator[Motion, None]:  # type: ignore[override]
-        import librosa
-
-        if audio.data.size > 0:
-            chunk = audio.data
-            if audio.sample_rate != _EMAGE_SR:
-                chunk = librosa.resample(chunk, orig_sr=audio.sample_rate, target_sr=_EMAGE_SR)
-            self._chunks.append(chunk.astype(np.float32))
-
-        if not audio.end:
+        if audio.data.size == 0:
             return
-
-        if not self._chunks:
-            return
-
-        full_audio = np.concatenate(self._chunks)
-        self._chunks = []
-
-        motion = await self._handle.infer.remote(full_audio)
+        motion = await self._handle.infer.remote(
+            audio.data.astype(np.float32), audio.sample_rate
+        )
+        motion.pts = audio.pts
         yield motion
