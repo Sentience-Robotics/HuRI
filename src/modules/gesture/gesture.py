@@ -13,6 +13,16 @@ from src.modules.text_to_speech.events import Audio
 
 _HF_REPO = os.environ.get("HURI_EMAGE_REPO", "H-Liu1997/emage_audio")
 _EMAGE_SR = 16000  # EMAGE expects 16 kHz mono audio
+_EMAGE_FPS = 30    # EMAGE emits motion at 30 fps
+
+# Sliding-window defaults. Overridable per-deployment via the module `args`
+# block in the client config, or globally via the env vars below.
+_CONTEXT_SEC = float(os.environ.get("HURI_GESTURE_CONTEXT_SEC", "2.0"))
+_MIN_CHUNK_SEC = float(os.environ.get("HURI_GESTURE_MIN_CHUNK_SEC", "0.5"))
+
+# Optional manual GPU split: cap the gesture process to a fraction of the GPU so
+# TTS keeps the lion's share. Only applied on CUDA when the value is set (>0).
+_GPU_MEM_FRACTION = float(os.environ.get("HURI_GESTURE_GPU_MEM_FRACTION", "0.0"))
 
 
 @dataclass
@@ -20,7 +30,7 @@ class Motion:
     poses: np.ndarray        # (t, 165)  SMPL-X axis-angle, 55 joints × 3
     expressions: np.ndarray  # (t, 100)  facial expression coefficients
     trans: np.ndarray        # (t, 3)    global root translation
-    fps: int = 30
+    fps: int = _EMAGE_FPS
     pts: float = 0.0         # presentation timestamp in seconds, paired with Audio.pts
 
 
@@ -30,6 +40,7 @@ class GestureDeployment:
         self,
         hf_repo: str = _HF_REPO,
         device: Optional[str] = None,
+        gpu_mem_fraction: float = _GPU_MEM_FRACTION,
     ):
         print(f"[Gesture] importing torch...", flush=True)
         import torch
@@ -40,6 +51,21 @@ class GestureDeployment:
             device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         )
         print(f"[Gesture] device={self.device} hf_repo={hf_repo!r}", flush=True)
+
+        # Manual GPU split: cap this process' share of GPU memory so the audio
+        # (TTS) path keeps the rest. num_gpus in the Ray serveConfig handles
+        # scheduling/packing; this caps actual allocation on the device.
+        if self.device.type == "cuda" and gpu_mem_fraction > 0:
+            try:
+                torch.cuda.set_per_process_memory_fraction(
+                    gpu_mem_fraction, self.device.index or 0
+                )
+                print(
+                    f"[Gesture] GPU memory fraction capped at {gpu_mem_fraction:.2f}",
+                    flush=True,
+                )
+            except Exception as e:  # noqa: BLE001 — best-effort knob, never fatal
+                print(f"[Gesture] WARNING could not cap GPU memory: {e!r}", flush=True)
 
         print("[Gesture] loading face_vq...", flush=True)
         face_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/face").to(self.device)
@@ -111,15 +137,32 @@ class Gesture(ModuleWithHandle):
     """Gesture Module
 
     Consumes streaming Audio chunks produced by TTS and generates whole-body
-    SMPL-X motion using the EMAGE audio-to-gesture model. Inference runs once
-    per chunk so Motion events interleave with audio playback instead of all
-    arriving at the end of the utterance.
+    SMPL-X motion using the EMAGE audio-to-gesture model.
+
+    Sliding window
+    ──────────────
+    TTS emits short, uneven audio chunks. Running EMAGE on each chunk in
+    isolation produces motion that is jerky at chunk seams (the model has no
+    context across boundaries) and is slow because the per-chunk overhead is
+    re-paid for tiny inputs — and gets worse the longer the utterance runs if
+    naively re-fed the whole buffer.
+
+    Instead we keep a rolling buffer and, each time at least ``min_chunk_sec``
+    of fresh audio has arrived, run inference over a window of
+    ``[context_sec of already-spoken audio] + [the fresh audio]``. The context
+    primes the model so the seam is continuous; only the motion frames for the
+    fresh audio are emitted. The window length is bounded by
+    ``context_sec + chunk size`` so inference cost stays flat regardless of
+    utterance length. Global root translation is rebased onto the previously
+    emitted frame to avoid a jump every window.
 
     input:  audio (Audio)
     output: motion (Motion)
 
-    :hf_repo: HuggingFace repository to load EMAGE weights from.
-    :device:  PyTorch device string; defaults to CUDA when available.
+    :hf_repo:      HuggingFace repository to load EMAGE weights from.
+    :device:       PyTorch device string; defaults to CUDA when available.
+    :context_sec:  Seconds of prior audio prepended to each window for continuity.
+    :min_chunk_sec: Minimum seconds of fresh audio to accumulate before inferring.
     """
 
     _handle_cls = GestureDeployment
@@ -129,14 +172,115 @@ class Gesture(ModuleWithHandle):
     def __init__(
         self,
         _handle: handle.DeploymentHandle,
+        context_sec: float = _CONTEXT_SEC,
+        min_chunk_sec: float = _MIN_CHUNK_SEC,
     ):
         super().__init__(_handle)
+        self._context_sec = float(context_sec)
+        self._min_chunk_sec = float(min_chunk_sec)
+
+        # Per-utterance sliding-window state. All sample counts are in the
+        # source sample rate; resampling to 16 kHz happens once inside infer().
+        self._lock = asyncio.Lock()
+        self._sr: Optional[int] = None
+        self._buffer = np.empty(0, dtype=np.float32)  # trailing audio (ctx + unprocessed)
+        self._buf_start = 0       # source-sr sample index of buffer[0] in utterance timeline
+        self._emitted = 0         # source-sr samples whose motion has been emitted
+        self._trans_anchor: Optional[np.ndarray] = None  # last emitted trans, for continuity
+
+    def _reset(self) -> None:
+        self._sr = None
+        self._buffer = np.empty(0, dtype=np.float32)
+        self._buf_start = 0
+        self._emitted = 0
+        self._trans_anchor = None
 
     async def process(self, audio: Audio) -> AsyncGenerator[Motion, None]:  # type: ignore[override]
-        if audio.data.size == 0:
-            return
-        motion = await self._handle.infer.remote(
-            audio.data.astype(np.float32), audio.sample_rate
+        # Each chunk arrives as its own process() task on the shared per-session
+        # instance, so serialise under a lock to keep the buffer ordered.
+        async with self._lock:
+            if audio.data.size > 0:
+                if self._sr is None:
+                    self._sr = audio.sample_rate
+                self._buffer = np.concatenate(
+                    [self._buffer, audio.data.astype(np.float32)]
+                )
+
+            sr = self._sr
+            end_of_utterance = audio.end
+
+            if sr is None:
+                # Nothing buffered yet (e.g. a lone end marker). Reset and bail.
+                if end_of_utterance:
+                    self._reset()
+                return
+
+            ctx_samples = int(self._context_sec * sr)
+            min_new_samples = int(self._min_chunk_sec * sr)
+
+            global_end = self._buf_start + len(self._buffer)
+            new_samples = global_end - self._emitted
+
+            # Wait for more audio unless this is the final flush of the utterance.
+            if new_samples <= 0 or (not end_of_utterance and new_samples < min_new_samples):
+                if end_of_utterance:
+                    self._reset()
+                return
+
+            motion = await self._infer_window(sr, ctx_samples, global_end)
+            if motion is not None:
+                yield motion
+
+            if end_of_utterance:
+                self._reset()
+
+    async def _infer_window(
+        self, sr: int, ctx_samples: int, global_end: int
+    ) -> Optional[Motion]:
+        # Window = [context of already-emitted audio] + [fresh audio].
+        win_start = max(self._buf_start, self._emitted - ctx_samples)
+        window = self._buffer[win_start - self._buf_start :]
+        if window.size == 0:
+            return None
+
+        motion: Motion = await self._handle.infer.remote(window, sr)
+        total_frames = motion.poses.shape[0]
+
+        # Drop the leading frames that correspond to the context (already emitted).
+        skip_sec = (self._emitted - win_start) / sr
+        skip_frames = int(round(skip_sec * motion.fps))
+        skip_frames = max(0, min(skip_frames, total_frames))
+
+        poses = motion.poses[skip_frames:]
+        expressions = motion.expressions[skip_frames:]
+        trans = motion.trans[skip_frames:].copy()
+
+        # Advance the timeline even if rounding left no new frames to emit.
+        self._emitted = global_end
+        self._trim_buffer(ctx_samples, global_end)
+
+        if poses.shape[0] == 0:
+            return None
+
+        # Rebase global translation onto the last emitted frame: every window
+        # restarts root motion near the origin, so without this the avatar would
+        # teleport back at each seam.
+        if self._trans_anchor is not None:
+            trans += self._trans_anchor - trans[0]
+        self._trans_anchor = trans[-1].copy()
+
+        out = Motion(
+            poses=poses,
+            expressions=expressions,
+            trans=trans,
+            fps=motion.fps,
+            pts=win_start / sr + skip_sec,  # == self._emitted_before / sr
         )
-        motion.pts = audio.pts
-        yield motion
+        return out
+
+    def _trim_buffer(self, ctx_samples: int, global_end: int) -> None:
+        # Keep only the trailing context so the next window stays bounded.
+        keep_from = global_end - ctx_samples
+        if keep_from > self._buf_start:
+            self._buffer = self._buffer[keep_from - self._buf_start :]
+            self._buf_start = keep_from

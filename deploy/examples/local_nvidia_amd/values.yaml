@@ -31,6 +31,15 @@ ray:
         runtime_env:
           env_vars:
             RAY_COLOR_PREFIX: "1"
+            # Gesture sliding-window defaults. The Gesture *module* runs in the
+            # HuRI (CPU) actor, so these live app-wide here rather than on the
+            # nvidia worker. context_sec primes EMAGE for continuity across
+            # audio chunks; min_chunk_sec coalesces tiny TTS chunks so fewer,
+            # bounded inferences run (lower latency, smoother motion). Can be
+            # overridden per session via the gesture module `args` in the
+            # client config.
+            HURI_GESTURE_CONTEXT_SEC: "2.0"
+            HURI_GESTURE_MIN_CHUNK_SEC: "0.5"
         deployments:
           # HuRI: FastAPI/WebSocket ingress + per-session router. CPU only —
           # all GPU work is offloaded to handle-backed deployments below.
@@ -60,16 +69,23 @@ ray:
               llm_provider: "vllm"
               llm_model: "Qwen3.5-4B-GGUF"
               verify_ssl: false
+          # GPU split (manual override knob): TTS and Gesture share one NVIDIA
+          # GPU. num_gpus/resources are Ray *scheduling* fractions — they let
+          # both replicas pack onto the same device and bias the split. Audio
+          # (TTS) gets the lion's share so streamed speech stays low-latency;
+          # gesture is given the remainder. Tune these two pairs together so
+          # they sum to <= 1.0. To also cap gesture's actual VRAM allocation,
+          # set HURI_GESTURE_GPU_MEM_FRACTION on the nvidia worker (see below).
           - name: TTS
             ray_actor_options:
               num_cpus: 1
-              num_gpus: 0.5
-              resources: {"GPU_TYPE_NVIDIA": 0.5}
+              num_gpus: 0.8
+              resources: {"GPU_TYPE_NVIDIA": 0.8}
           - name: GestureGeneration
             ray_actor_options:
               num_cpus: 1
-              num_gpus: 0.5
-              resources: {"GPU_TYPE_NVIDIA": 0.5}
+              num_gpus: 0.2
+              resources: {"GPU_TYPE_NVIDIA": 0.2}
 
 head:
   # ClusterIP is preferred on real clusters; use NodePort for kind/minikube/k3s.
@@ -139,6 +155,12 @@ workerGroups:
         value: "compute,utility"
       - name: HF_HUB_DOWNLOAD_TIMEOUT
         value: "10"
+      # Manual GPU split for gesture (see GestureGeneration above). Caps the
+      # EMAGE process to a fraction of GPU memory so TTS keeps the rest. "0"
+      # disables the cap. Keep roughly in line with its num_gpus fraction.
+      # Read by GestureGeneration, which runs in this worker group.
+      - name: HURI_GESTURE_GPU_MEM_FRACTION
+        value: "0.2"
     # Models whose PVC will be mounted in this worker group.
     # Keys must match entries under .Values.models.
     mountedModels:

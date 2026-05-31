@@ -161,34 +161,41 @@ class TTS(ModuleWithHandle):
         self._session_id: str | None = None
         self._audio_q: asyncio.Queue | None = None
         self._stream_task: asyncio.Task | None = None
-        self._session_ready: asyncio.Event | None = None
+        # The EventGraph fans each token out as its own concurrent process()
+        # task on this shared instance. This lock serialises session setup and
+        # text pushes so tokens reach CosyVoice's text queue in arrival order,
+        # exactly once. asyncio.Lock wakes waiters FIFO and tokens are created
+        # in order, so order is preserved — crucially the end-of-utterance token
+        # can no longer overtake a content token (which would truncate synthesis
+        # and silently drop trailing words).
+        self._push_lock = asyncio.Lock()
 
     async def process(self, token: Token) -> AsyncGenerator[Audio, None]:  # type: ignore[override]
-        # Subsequent tokens within an utterance just push text — the first
-        # token's invocation is the long-running yielder that emits chunks as
-        # soon as CosyVoice produces them, decoupled from token arrival.
-        if self._session_id is not None:
+        # Acquire BEFORE any await so lock-acquisition order matches token order.
+        # Setup + push happen under the lock; only the first token of an
+        # utterance goes on to drain/yield audio (outside the lock, so pushes of
+        # later tokens are never blocked by the long-running drain).
+        async with self._push_lock:
+            is_first = self._session_id is None
+            if is_first:
+                self._session_id = str(uuid.uuid4())
+                self._audio_q = asyncio.Queue()
+                print(f"[TTS-client] [{self._session_id}] opening new utterance session", flush=True)
+                await self._handle.start_session.remote(self._session_id)
+                self._stream_task = asyncio.create_task(
+                    self._drain_audio(self._session_id, self._audio_q)
+                )
+
             sid = self._session_id
-            ready = self._session_ready
-            if ready is not None:
-                await ready.wait()
+            audio_q = self._audio_q
+            stream_task = self._stream_task
             print(f"[TTS-client] [{sid}] push token: {token.text!r} (end={token.end})", flush=True)
             await self._handle.push_text.remote(sid, token.text, token.end)
+
+        if not is_first:
             return
 
-        self._session_id = str(uuid.uuid4())
-        self._session_ready = asyncio.Event()
-        sid = self._session_id
-        audio_q: asyncio.Queue = asyncio.Queue()
-        self._audio_q = audio_q
-        print(f"[TTS-client] [{sid}] opening new utterance session", flush=True)
-        await self._handle.start_session.remote(sid)
-        self._stream_task = asyncio.create_task(self._drain_audio(sid, audio_q))
-        self._session_ready.set()
-
-        print(f"[TTS-client] [{sid}] push token: {token.text!r} (end={token.end})", flush=True)
-        await self._handle.push_text.remote(sid, token.text, token.end)
-
+        assert audio_q is not None and stream_task is not None
         try:
             count = 0
             while True:
@@ -198,16 +205,16 @@ class TTS(ModuleWithHandle):
                 count += 1
                 print(f"[TTS-client] [{sid}] yield chunk #{count}", flush=True)
                 yield item
-            await self._stream_task
+            await stream_task
             print(f"[TTS-client] [{sid}] utterance complete ({count} chunks)", flush=True)
 
             sample_rate = await self._handle.get_sample_rate.remote()
             yield Audio(data=np.array([], dtype=np.float32), sample_rate=sample_rate, end=True)
         finally:
-            self._session_id = None
-            self._audio_q = None
-            self._stream_task = None
-            self._session_ready = None
+            async with self._push_lock:
+                self._session_id = None
+                self._audio_q = None
+                self._stream_task = None
 
     async def _drain_audio(self, session_id: str, audio_q: asyncio.Queue) -> None:
         try:
