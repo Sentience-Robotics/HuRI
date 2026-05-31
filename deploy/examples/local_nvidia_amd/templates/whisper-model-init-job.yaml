@@ -1,6 +1,7 @@
 {{- if .Values.models.whisper.enabled }}
 {{- $model := .Values.models.whisper }}
 {{- $pvcName := printf "%s-whisper-models" (include "huri.fullname" .) }}
+{{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace $pvcName) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -21,6 +22,7 @@ spec:
   {{- if $model.pvc.storageClassName }}
   storageClassName: {{ $model.pvc.storageClassName }}
   {{- end }}
+{{- end }}
 ---
 # Runs only on first install (not on upgrade) — model is already on the PVC.
 apiVersion: batch/v1
