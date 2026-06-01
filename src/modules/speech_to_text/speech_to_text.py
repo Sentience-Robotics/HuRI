@@ -41,7 +41,7 @@ class STT(Module):
     ):
         super().__init__()
 
-        self.model_faster = WhisperModel(model)
+        self.model_faster = WhisperModel(model, cpu_threads=2)
         self.language = language
 
         self.sample_rate = sample_rate
@@ -83,13 +83,15 @@ class STT(Module):
         self.pending_silence = False
         processing_audio = np.concatenate(processing_chunks, axis=0)
 
-        segments, _ = self.model_faster.transcribe(
-            processing_audio,
-            language=self.language,
-            beam_size=1,  # faster for realtime
-        )
+        def transcribe_text():
+            segments, _ = self.model_faster.transcribe(
+                processing_audio,
+                language=self.language,
+                beam_size=1,
+            )
+            return " ".join(seg.text for seg in segments).strip()
 
-        current_text = " ".join([seg.text for seg in segments]).strip()
+        current_text = await asyncio.to_thread(transcribe_text)
 
         processed_size = self.window_size - self.step_size
         async with self.lock:
