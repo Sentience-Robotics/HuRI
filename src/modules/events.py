@@ -7,6 +7,7 @@ from src.modules.text_to_speech.events import Audio, Token
 
 def get_events() -> Dict[str, Type[EventData | bytes]]:
     events: Dict[str, Type[EventData | bytes]] = {
+        "audio_in": bytes,  # inbound mic frames (raw int16 PCM)
         "audio": bytes,
         "voice": Voice,
         "transcript": Transcript,
@@ -22,9 +23,10 @@ def get_events() -> Dict[str, Type[EventData | bytes]]:
     else:
         events["motion"] = Motion
 
-    # TTS output "audio" is an Audio dataclass internally; the websocket boundary
-    # only ever decodes raw bytes for the "audio" topic (mic input), so the
-    # registry keeps bytes there. Keep Audio importable for type completeness.
+    # TTS output "audio" is an Audio dataclass internally, sent to the client by
+    # the Sender's Audio branch (never decoded inbound). Inbound mic frames use
+    # the separate "audio_in" topic above. The registry keeps bytes for "audio"
+    # only for output-type registration. Keep Audio importable for completeness.
     _ = Audio
 
     return events

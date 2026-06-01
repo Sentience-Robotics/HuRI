@@ -13,7 +13,7 @@ class MIC(Module):
 
     Detect voice and silence using WebRTC VAD.
 
-    input: audio,
+    input: audio_in,
     output: voice
 
     :vad_agressiveness: from 0 (low) to 3 (high, can distord audio).
@@ -23,7 +23,10 @@ class MIC(Module):
         Can only be 0.010, 0.020 and 0.030.
     """
 
-    input_type = "audio"
+    # Inbound microphone frames travel on their own topic so the TTS-output
+    # "audio" topic (consumed by Gesture and the client Sender) never collides
+    # with mic input — otherwise raw mic bytes get echoed back to the client.
+    input_type = "audio_in"
     output_type = "voice"
 
     def __init__(

@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import List, Optional
+from typing import AsyncGenerator, List
 
 import numpy as np
 from ray import serve
@@ -93,40 +93,66 @@ class STT(ModuleWithHandle):
 
         self.buffer: List[np.ndarray] = []
 
-        self.silence: bool = True
+        # Set when the VAD emits its single end-of-utterance marker (Voice(None)).
+        # Remembered rather than acted on immediately so it survives an in-flight
+        # transcribe — otherwise the terminal window (and thus the question that
+        # drives the RAG) is silently dropped.
+        self.pending_end: bool = False
 
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
-    async def process(self, voice: Voice) -> Optional[Transcript]:
-        if voice.data is None:
-            self.silence = True
-        else:
-            self.silence = False
-            async with self.lock:
+    async def process(self, voice: Voice) -> AsyncGenerator[Transcript, None]:  # type: ignore[override]
+        async with self.lock:
+            if voice.data is None:
+                self.pending_end = True
+            else:
                 self.buffer.append(voice.data)
 
-        async with self.lock:
             if self.running:
-                return None
+                # Another invocation owns the drain loop below; it will pick up
+                # the frame we just buffered (and any pending end-of-utterance).
+                return
             self.running = True
 
-        async with self.lock:
-            buffer_size = len(self.buffer)
-            if buffer_size == 0 or (
-                self.silence is False and buffer_size < self.window_size
-            ):
+        try:
+            while True:
+                async with self.lock:
+                    end = self.pending_end
+                    buffer_size = len(self.buffer)
+
+                    if buffer_size == 0:
+                        # Nothing left to transcribe. If the utterance just
+                        # ended, still emit a terminal transcript so the
+                        # aggregator finalises the question.
+                        if end:
+                            self.pending_end = False
+                            yield Transcript("", True)
+                        return
+
+                    # Mid-speech: hold until a full window has accumulated.
+                    if not end and buffer_size < self.window_size:
+                        return
+
+                    processing_chunks = self.buffer[: self.window_size]
+                    # On end-of-utterance, the last window drains the buffer.
+                    final = end and buffer_size <= self.window_size
+
+                processing_audio = np.concatenate(processing_chunks, axis=0)
+                current_text: str = await self._handle.transcribe.remote(
+                    processing_audio
+                )
+
+                async with self.lock:
+                    if final:
+                        self.buffer = []
+                        self.pending_end = False
+                    else:
+                        self.buffer = self.buffer[self.window_size - self.step_size :]
+
+                yield Transcript(current_text, final)
+                if final:
+                    return
+        finally:
+            async with self.lock:
                 self.running = False
-                return None
-            processing_chunks = self.buffer[: self.window_size]
-
-        processing_audio = np.concatenate(processing_chunks, axis=0)
-
-        current_text: str = await self._handle.transcribe.remote(processing_audio)
-
-        processed_size = self.window_size - self.step_size
-        async with self.lock:
-            self.buffer = self.buffer[processed_size:]
-            self.running = False
-
-        return Transcript(current_text, self.silence)

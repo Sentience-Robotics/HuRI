@@ -47,7 +47,7 @@ class EventGraph:
 
     async def publish(self, event_topic, data):
         subs = self.subscribers[event_topic]
-        if event_topic not in ("audio",):  # skip mic-frame spam
+        if event_topic not in ("audio_in",):  # skip mic-frame spam
             logger.info(
                 "[GRAPH] publish topic=%r subscribers=%s",
                 event_topic, [type(m).__name__ for m in subs],
