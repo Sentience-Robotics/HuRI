@@ -195,8 +195,8 @@ class RAGHandle:
             "Use the context in the user's message to inform your answers when "
             "it is relevant, but always answer in character. If you don't know "
             "something, improvise in character rather than admitting you lack "
-            "information or breaking character."
-            "Make small sentences, and no emojis"
+            "information or breaking character. "
+            "IMPORTANT: Reply in 1-3 short sentences maximum. Be extremely concise. No lists, no emojis, no long explanations."
         )
         system_prompt = " ".join(parts)
 
@@ -381,13 +381,15 @@ class RAG(ModuleWithHandle, ModuleWithId):
         language="en",
         tone="formal",
         response_format="paragraph",
-        max_length=1024,
+        max_length=220,
         extra_instructions="",
         persona="",
         temperature=0.7,
         **kwargs,
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
+
+        print(f"[RAG] Initialized with user_id={_user_id}, language={language}, tone={tone}, response_format={response_format}, max_length={max_length}, temperature={temperature}")
 
         self.preferences = {
             "language": language,
