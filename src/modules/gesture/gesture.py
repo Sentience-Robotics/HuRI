@@ -90,7 +90,28 @@ class GestureDeployment:
         print("[Gesture] loading EmageAudioModel...", flush=True)
         self.model = EmageAudioModel.from_pretrained(hf_repo).to(self.device)
         self.model.eval()
+
+        self._warmup()
         print(f"[Gesture] ready", flush=True)
+
+    def _warmup(self) -> None:
+        # The first inference pays a one-time cold-start cost (CUDA context
+        # init, kernel JIT/load, cuDNN autotuning, caching-allocator warmup)
+        # that can take several seconds. Run a throwaway pass here so that cost
+        # is paid at startup — where we're already blocking on weight loads —
+        # rather than on the first user-facing gesture. Best-effort: a failure
+        # here must never prevent the deployment from coming up.
+        import time
+
+        try:
+            # ~3 s of silence at 16 kHz exercises the full sliding-window path
+            # (multiple rounds + remainder) the way a real utterance would.
+            dummy = np.zeros(_EMAGE_SR * 3, dtype=np.float32)
+            t0 = time.time()
+            self.infer(dummy, source_sr=_EMAGE_SR)
+            print(f"[Gesture] warmup done in {time.time() - t0:.2f}s", flush=True)
+        except Exception as e:  # noqa: BLE001 — warmup is an optimisation, never fatal
+            print(f"[Gesture] WARNING warmup failed: {e!r}", flush=True)
 
     def infer(self, audio_np: np.ndarray, source_sr: int = _EMAGE_SR) -> Motion:
         import torch
