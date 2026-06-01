@@ -41,7 +41,7 @@ class STT(Module):
     ):
         super().__init__()
 
-        self.model_faster = WhisperModel(model, cpu_threads=2)
+        self.model_faster = WhisperModel(model)
         self.language = language
 
         self.sample_rate = sample_rate
