@@ -9,6 +9,7 @@ from scipy.signal import resample
 
 from src.core.client import ClientHook, ClientSender
 from src.core.interface import Interface
+from src.modules.rag.events import RAGResult
 from src.modules.speech_to_text.events import Sentence
 
 
@@ -99,14 +100,14 @@ class AudioHook(ClientHook[bytes]):
         self.stream.write(audio.reshape(-1, 1))
 
 
-class TextHook(ClientHook[Sentence]):
-    input_type = Sentence
+class TextHook(ClientHook[RAGResult]):
+    input_type = RAGResult
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    async def hook(self, singletton: None, data: Sentence):
-        print("<<", data.text)
+    async def hook(self, singletton: None, data: RAGResult):
+        print("<<", data.answer)
 
 
 class CLIInterface(Interface):
