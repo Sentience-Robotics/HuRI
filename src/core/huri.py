@@ -32,7 +32,7 @@ class HuRI:
         self,
         modules: Dict[str, Type[Module]],
         handles: Dict[str, handle.DeploymentHandle],
-        events: Dict[str, Type[EventData]],
+        events: Dict[str, Type[EventData | bytes]],
     ) -> None:
         self.module_factory = ModuleFactory(handles)
         self.event_factory = EventDataFactory()
@@ -80,9 +80,12 @@ class HuRI:
 
         user_id = client_config_raw.get("user_id") or str(uuid.uuid4())
 
-        senders: List[Module] = [
-            Sender(ws, topic) for topic in client_config.topic_list
+        topic_list = [
+            topic
+            for hook_config in client_config.hooks.values()
+            for topic in hook_config.topics
         ]
+        senders: List[Module] = [Sender(ws, topic) for topic in topic_list]
         modules: List[Module] = (
             self.module_factory.create_from_config(user_id, client_config.modules)
             + senders
@@ -112,7 +115,7 @@ class HuRI:
                         msg_text = msg["text"]
                         event = json.loads(msg_text)
                         topic = event["topic"]
-                        data = event["data"]
+                        data = event["data"]  # TODO client/server one function
 
                     data = self.event_factory.create(topic, data)
 
