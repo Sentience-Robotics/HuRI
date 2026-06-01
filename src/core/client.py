@@ -5,17 +5,17 @@ import os
 import struct
 from collections import defaultdict
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 import websockets
 
 from src.core.dataclasses.config import ClientConfig
 from src.core.events import EventData
 
-from .interface import Interface
+T = TypeVar("T", bound=EventData | bytes)
 
 
-class ClientSender:
+class ClientSender(Generic[T]):
     """This class abstract sending data to HuRI.
 
     output_type: is the event data structure that the ClientSender will send.
@@ -25,17 +25,10 @@ class ClientSender:
     and use ClientSender.send to send data to HuRI.
     """
 
-    output_type: Type[EventData] | bytes
+    output_type: Type[T]
 
     def __init__(self, topic: str, **_):
         self.topic = topic
-        if issubclass(self.output_type, EventData):
-            self.send_function = self._send_event_data
-        elif issubclass(self.output_type, bytes):
-            self.send_function = self._send_bytes
-        else:
-            raise RuntimeError(f"{self.output_type} should be inherited from \
-EventData or bytes")
 
     async def input_loop(self, ws: websockets.ClientConnection):
         raise NotImplementedError
@@ -51,11 +44,14 @@ EventData or bytes")
 
         await ws.send(packet)
 
-    async def send(self, ws: websockets.ClientConnection, data: EventData | bytes):
-        await self.send_function(ws, data)
+    async def send(self, ws: websockets.ClientConnection, data: T):
+        if isinstance(data, bytes):
+            await self._send_bytes(ws, data)
+        else:
+            await self._send_event_data(ws, data)
 
 
-class ClientHook:
+class ClientHook(Generic[T]):
     """This class abstract processing data from HuRI.
 
     input_type: is the event data structure that the ClientHook will process.
@@ -67,12 +63,12 @@ class ClientHook:
     and comes from the used interface.
     """
 
-    input_type: Type[EventData] | bytes
+    input_type: Type[T]
 
     def __init__(self, **_):
         pass
 
-    async def hook(self, singletton: Any, data: EventData | bytes):
+    async def hook(self, singletton: Any, data: T):
         raise NotImplementedError
 
 
@@ -89,7 +85,7 @@ class Client:
         module_path, object_name = self.config.interface_path.split(":", 1)
 
         module = importlib.import_module(module_path)
-        interface: Interface = getattr(module, object_name)
+        interface = getattr(module, object_name)
 
         self.singletton = interface.singletton
 
@@ -133,7 +129,7 @@ class Client:
                     data = event["data"]
 
                 for hook in self.hooks[topic]:
-                    if not issubclass(hook.input_type, bytes):
+                    if not isinstance(data, bytes):
                         data = hook.input_type(**data)
                     asyncio.create_task(hook.hook(self.singletton, data))
 
