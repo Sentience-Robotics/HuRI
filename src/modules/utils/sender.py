@@ -57,7 +57,7 @@ class Sender(Module):
             )
             await self.ws.send_bytes(self._prefix(header + body))
         elif isinstance(data, EventData):
-            await self.ws.send_json(asdict(data))
+            await self.ws.send_json({"topic": self.input_type, **asdict(data)})
         else:
             await self.ws.send_text(str(data))
 

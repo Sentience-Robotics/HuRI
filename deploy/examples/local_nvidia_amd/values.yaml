@@ -111,10 +111,10 @@ head:
   resources:
     limits:
       cpu: "2"
-      memory: "8Gi"
+      memory: "3Gi"
     requests:
       cpu: "2"
-      memory: "4Gi"
+      memory: "2Gi"
 
 # Worker groups: one logical "gpu" group per vendor and one "cpu" group.
 #
