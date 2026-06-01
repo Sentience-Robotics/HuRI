@@ -1,3 +1,4 @@
+import struct
 from dataclasses import asdict
 
 from fastapi import WebSocket
@@ -23,8 +24,8 @@ class Sender(Module):
 
     async def process(self, data: EventData | bytes):
         if isinstance(data, bytes):
-            await self.ws.send_bytes(data)
-        elif isinstance(data, EventData):
-            await self.ws.send_json(asdict(data))
+            topic_bytes = self.input_type.encode()
+            packet = struct.pack("!H", len(topic_bytes)) + topic_bytes + data
+            await self.ws.send_bytes(packet)
         else:
-            await self.ws.send_text(data)
+            await self.ws.send_json({"topic": self.input_type, "data": asdict(data)})
