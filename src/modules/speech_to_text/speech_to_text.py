@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import AsyncGenerator, List
+from typing import List, Optional
 
 import numpy as np
 from ray import serve
@@ -15,15 +15,20 @@ _MODEL_PATH = os.environ.get("HURI_STT_MODEL_PATH", "base")
 
 @serve.deployment(name="STT")
 class STTDeployment:
-    """Stateless Whisper inference actor.
+    """faster-whisper model wrapper.
 
-    Holds the faster-whisper model in a single Ray actor (pinned to the AMD
-    worker in deployment configs). Exposes a single transcribe() call so
-    per-session STT clients can offload the heavy work without owning a GPU.
+    Holds the WhisperModel and runs transcription on its own Ray Serve actor,
+    off the HuRI master actor — model load and GPU inference no longer block the
+    websocket ingress / per-session router. Pinned to a GPU worker via
+    ray_actor_options in the Serve config (see deploy values.yaml).
 
-    HURI_STT_MODEL_PATH: path to a local faster-whisper model directory (from
-    the whisper PVC). Falls back to "base" which triggers a HuggingFace
-    download — only acceptable for local dev without a PVC.
+    Stateless across calls: the per-session sliding-window buffering lives in the
+    STT module, so this deployment is shared across all sessions.
+
+    :model: path to (or size name of) the faster-whisper model. Defaults to the
+        HURI_STT_MODEL_PATH env var, falling back to "base".
+    :device: "cpu", "cuda", or "auto".
+    :compute_type: e.g. "int8", "float16", or "auto".
     """
 
     def __init__(
@@ -32,7 +37,6 @@ class STTDeployment:
         device: str = "auto",
         compute_type: str = "auto",
     ):
-        print(f"[STT] loading model from {model!r} (device={device} compute_type={compute_type})", flush=True)
         from faster_whisper import WhisperModel
 
         self.model_faster = WhisperModel(
@@ -40,35 +44,32 @@ class STTDeployment:
             device=device,
             compute_type=compute_type,
         )
-        print(f"[STT] model loaded", flush=True)
-        self.language = "en"
 
-    async def transcribe(self, audio: np.ndarray) -> str:
-        loop = asyncio.get_running_loop()
-        segments, _ = await loop.run_in_executor(
-            None,
-            lambda: self.model_faster.transcribe(
-                audio,
-                language=self.language,
-                beam_size=1,
-            ),
+    async def transcribe(self, audio: np.ndarray, language: str = "en") -> str:
+        segments, _ = self.model_faster.transcribe(
+            audio,
+            language=language,
+            beam_size=1,  # faster for realtime
         )
-        return " ".join(seg.text for seg in segments).strip()
+        return " ".join([seg.text for seg in segments]).strip()
 
 
 class STT(ModuleWithHandle):
     """STT Module
 
-    Per-session client: keeps the rolling window / silence state, offloads each
-    transcription window to the shared STTDeployment actor.
+    Transcribe voice using Faster_Whisper.
+
+    Holds the per-session sliding-window buffer and delegates the actual
+    transcription to a handle-backed STTDeployment, so the Whisper model runs
+    off the HuRI master node.
 
     input: voice,
     output: transcript
 
+    :language: language spoken in the audio. It should be a language code such
+        as "en" or "fr".
     :sample_rate: size of received voice audio. Usually 8000, 16000 or 48000.
     :block_duration: size of received voice audio (in s).
-    :transcribe_window: rolling window length (s) handed to Whisper.
-    :transcribe_step: stride (s) between successive windows.
     """
 
     _handle_cls = STTDeployment
@@ -83,76 +84,58 @@ class STT(ModuleWithHandle):
         block_duration: float = 0.020,  # s
         transcribe_window: float = 2.0,  # s
         transcribe_step: float = 1.0,  # s
+        **kwargs,
     ):
-        super().__init__(_handle=_handle)
+        super().__init__(_handle=_handle, **kwargs)
 
         self.language = language
+
         self.sample_rate = sample_rate
         self.window_size: int = int(transcribe_window / block_duration)
         self.step_size: int = int(transcribe_step / block_duration)
 
         self.buffer: List[np.ndarray] = []
 
-        # Set when the VAD emits its single end-of-utterance marker (Voice(None)).
-        # Remembered rather than acted on immediately so it survives an in-flight
-        # transcribe — otherwise the terminal window (and thus the question that
-        # drives the RAG) is silently dropped.
-        self.pending_end: bool = False
+        self.silence: bool = True
+
+        self.prev_text: str = ""
+        self.stable_text: str = ""
 
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
-    async def process(self, voice: Voice) -> AsyncGenerator[Transcript, None]:  # type: ignore[override]
-        async with self.lock:
-            if voice.data is None:
-                self.pending_end = True
-            else:
+    async def process(self, voice: Voice) -> Optional[Transcript]:  # type: ignore[override]
+        if voice.data is None:
+            self.silence = True
+        else:
+            self.silence = False
+            async with self.lock:
                 self.buffer.append(voice.data)
 
+        async with self.lock:
             if self.running:
-                # Another invocation owns the drain loop below; it will pick up
-                # the frame we just buffered (and any pending end-of-utterance).
-                return
+                return None
             self.running = True
 
-        try:
-            while True:
-                async with self.lock:
-                    end = self.pending_end
-                    buffer_size = len(self.buffer)
-
-                    if buffer_size == 0:
-                        # Nothing left to transcribe. If the utterance just
-                        # ended, still emit a terminal transcript so the
-                        # aggregator finalises the question.
-                        if end:
-                            self.pending_end = False
-                            yield Transcript("", True)
-                        return
-
-                    # Mid-speech: hold until a full window has accumulated.
-                    if not end and buffer_size < self.window_size:
-                        return
-
-                    processing_chunks = self.buffer[: self.window_size]
-                    # On end-of-utterance, the last window drains the buffer.
-                    final = end and buffer_size <= self.window_size
-
-                processing_audio = np.concatenate(processing_chunks, axis=0)
-                current_text: str = await self._handle.transcribe.remote(
-                    processing_audio
-                )
-
-                async with self.lock:
-                    if final:
-                        self.buffer = []
-                        self.pending_end = False
-                    else:
-                        self.buffer = self.buffer[self.window_size - self.step_size :]
-
-                yield Transcript(current_text, final)
-                if final:
-                    return
-        finally:
-            async with self.lock:
+        async with self.lock:
+            buffer_size = len(self.buffer)
+            if buffer_size == 0 or (
+                self.silence is False and buffer_size < self.window_size
+            ):
                 self.running = False
+                return None
+            processing_chunks = self.buffer[: self.window_size]
+
+        self.pending_silence = False
+        processing_audio = np.concatenate(processing_chunks, axis=0)
+
+        current_text = await self._handle.transcribe.remote(
+            processing_audio, self.language
+        )
+
+        processed_size = self.window_size - self.step_size
+        async with self.lock:
+            self.buffer = self.buffer[processed_size:]
+            self.running = False
+
+        return Transcript(current_text, self.silence)

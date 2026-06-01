@@ -44,6 +44,7 @@ ray:
             # The reference transcript MUST come AFTER the marker, or the LM treats it as
             # an instruction and intermittently speaks it (prompt leakage).
             HURI_VOICE_TRANSCRIPT: "You are a helpful assistant.<|endofprompt|>Instinct creates its own oppressors and bids us rise up against them."
+            HURI_STT_MODEL_PATH: /models/whisper/Systran/faster-whisper-base
         deployments:
           # HuRI: FastAPI/WebSocket ingress + per-session router. CPU only —
           # all GPU work is offloaded to handle-backed deployments below.
