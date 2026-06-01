@@ -29,10 +29,19 @@ def _trace(msg: str) -> None:
 
 
 # Defaults — overridden by env vars in production (see README.md)
-_MODEL_PATH = os.environ.get("HURI_MODEL_PATH", "/models/cosytts/iic/CosyVoice2-0.5B")
+_MODEL_PATH = os.environ.get(
+    "HURI_MODEL_PATH", "/models/cosytts/FunAudioLLM/Fun-CosyVoice3-0.5B-2512"
+)
 _VOICE_SAMPLE_PATH = os.environ.get("HURI_VOICE_SAMPLE_PATH", "/assets/voice.wav")
-_VOICE_SAMPLE_TRANSCRIPT = os.environ.get(
-    "HURI_VOICE_TRANSCRIPT", "Hello, this is my voice sample for cloning."
+# CosyVoice3 expects "<instruction><|endofprompt|><transcript-of-voice.wav>". If the
+# config supplies a bare transcript (no marker), prepend the default instruction so the
+# transcript lands AFTER <|endofprompt|> — otherwise the LM treats it as an instruction
+# and intermittently renders it as speech (prompt leakage). The transcription is a must.
+_raw_transcript = os.environ["HURI_VOICE_TRANSCRIPT"]
+_VOICE_SAMPLE_TRANSCRIPT = (
+    _raw_transcript
+    if "<|endofprompt|>" in _raw_transcript
+    else f"You are a helpful assistant.<|endofprompt|>{_raw_transcript}"
 )
 
 _END_TEXT = object()   # sentinel pushed into the text queue to close synth
@@ -42,7 +51,7 @@ _DONE = object()       # sentinel for exhausted sync generator
 
 @serve.deployment(name="TTS", max_ongoing_requests=200)
 class TTSDeployment:
-    """CosyVoice2 wrapper with per-session bistream synthesis.
+    """CosyVoice3 wrapper with per-session bistream synthesis.
 
     The model's `inference_zero_shot` accepts a Python generator as `tts_text`
     and yields audio chunks as text arrives — that's the "bistream" mode.
@@ -57,7 +66,7 @@ class TTSDeployment:
         voice_sample_path: str = _VOICE_SAMPLE_PATH,
         voice_sample_transcript: str = _VOICE_SAMPLE_TRANSCRIPT,
     ):
-        _trace(f"TTSDeployment init: model_path={model_path} voice={voice_sample_path}")
+        _trace(f"TTSDeployment init: model_path={model_path} voice={voice_sample_path} transcript={voice_sample_transcript}")
 
         cosy_dir = os.environ.get("HURI_COSY_DIR")
         if cosy_dir:
@@ -66,11 +75,11 @@ class TTSDeployment:
                 sys.path.insert(0, matcha_path)
                 logger.debug("Added Matcha-TTS path to sys.path: %s", matcha_path)
 
-        from cosyvoice.cli.cosyvoice import CosyVoice2
+        from cosyvoice.cli.cosyvoice import CosyVoice3
 
-        self.model = CosyVoice2(model_path, load_jit=False, load_trt=False)
+        self.model = CosyVoice3(model_dir=model_path, load_trt=False)
         self.sample_rate: int = self.model.sample_rate
-        _trace(f"CosyVoice2 loaded (sample_rate={self.sample_rate})")
+        _trace(f"CosyVoice3 loaded (sample_rate={self.sample_rate})")
 
         self.prompt_speech = voice_sample_path
         self.prompt_text: str = voice_sample_transcript
@@ -140,7 +149,7 @@ class TTSDeployment:
 
 
 class TTS(ModuleWithHandle):
-    """TTS Module — bistream tokens-in / audio-out via CosyVoice2.
+    """TTS Module — bistream tokens-in / audio-out via CosyVoice3.
 
     Opens one synthesis session per utterance (delimited by `token.end`). Each
     incoming token is pushed straight into the model's text generator so audio

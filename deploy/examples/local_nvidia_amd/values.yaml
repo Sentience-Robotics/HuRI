@@ -40,6 +40,10 @@ ray:
             # client config.
             HURI_GESTURE_CONTEXT_SEC: "2.0"
             HURI_GESTURE_MIN_CHUNK_SEC: "0.5"
+            # CosyVoice3 contract: "<instruction><|endofprompt|><transcript-of-voice.wav>".
+            # The reference transcript MUST come AFTER the marker, or the LM treats it as
+            # an instruction and intermittently speaks it (prompt leakage).
+            HURI_VOICE_TRANSCRIPT: "You are a helpful assistant.<|endofprompt|>Instinct creates its own oppressors and bids us rise up against them."
         deployments:
           # HuRI: FastAPI/WebSocket ingress + per-session router. CPU only —
           # all GPU work is offloaded to handle-backed deployments below.
@@ -169,11 +173,11 @@ workerGroups:
     resources:
       limits:
         cpu: "4"
-        memory: "8Gi"
+        memory: "14Gi"
         nvidia.com/gpu: "1"
       requests:
         cpu: "2"
-        memory: "4Gi"
+        memory: "8Gi"
         nvidia.com/gpu: "1"
     shmSize: 2Gi
 
@@ -256,16 +260,21 @@ models:
         - ReadWriteOnce
     # Where the model weights PVC is mounted inside the worker container.
     mountPath: /models/cosytts
+    # Set to true to wipe the existing model dir and re-download on the next
+    # helm upgrade. Needed when switching model versions on a PVC that already
+    # holds weights (the init Job otherwise skips download when the model dir
+    # already looks complete). Set back to false after the redownload runs.
+    forceDownload: false
     modelSource:
       # type: modelscope | huggingface  (only modelscope is implemented)
       type: modelscope
       # ModelScope model ID — snapshot_download uses this as the sub-path
       # inside mountPath, so the final path is mountPath/modelId.
-      modelId: iic/CosyVoice2-0.5B
+      modelId: FunAudioLLM/Fun-CosyVoice3-0.5B-2512
     # Env vars injected into every worker that mounts this model.
     # HURI_MODEL_PATH must match mountPath/modelId (see text_to_speech.py).
     env:
-      HURI_MODEL_PATH: /models/cosytts/iic/CosyVoice2-0.5B
+      HURI_MODEL_PATH: /models/cosytts/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
       # Path to the CosyVoice repo root containing third_party/Matcha-TTS.
       HURI_COSY_DIR: /app/cosyvoice
 
@@ -318,7 +327,6 @@ voiceAssets:
   mountPath: /assets
   env:
     HURI_VOICE_SAMPLE_PATH: /assets/voice.wav
-    HURI_VOICE_TRANSCRIPT: "Instinct creates its own oppressors and bids us rise up against them."
 
 # Ingress for the Ray Serve endpoint (port 8000).
 ingress:

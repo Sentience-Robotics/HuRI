@@ -24,7 +24,9 @@ spec:
   {{- end }}
 {{- end }}
 ---
-# Runs only on first install (not on upgrade) — models are already on the PVC.
+# Runs on every install/upgrade (pre-* hook) but exits early once the model dir
+# already looks complete — so a no-op upgrade costs only a pod spin-up. Set
+# $model.forceDownload=true to wipe and re-fetch (e.g. when changing versions).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -59,25 +61,24 @@ spec:
             - |
               set -e
               MODEL_DIR="{{ $model.mountPath }}/{{ $model.modelSource.modelId }}"
-              BLANK_EN_DIR="$MODEL_DIR/CosyVoice-BlankEN"
-              HAS_MAIN_CONFIG="no"
-              HAS_QWEN_WEIGHTS="no"
-              if [ -f "$MODEL_DIR/cosyvoice2.yaml" ]; then
-                HAS_MAIN_CONFIG="yes"
+              {{- if $model.forceDownload }}
+              echo "forceDownload=true — wiping $MODEL_DIR for a fresh download."
+              rm -rf "$MODEL_DIR"
+              {{- end }}
+              # CosyVoice3 ships cosyvoice3.yaml + llm.pt (the Qwen LM) plus a
+              # bundled CosyVoice-BlankEN/ dir, so a single snapshot grabs
+              # everything the worker needs — no separate sub-model download.
+              HAS_CONFIG="no"
+              HAS_LLM="no"
+              if [ -f "$MODEL_DIR/cosyvoice3.yaml" ]; then
+                HAS_CONFIG="yes"
               fi
-              if [ -f "$BLANK_EN_DIR/model.safetensors" ] || \
-                 [ -f "$BLANK_EN_DIR/pytorch_model.bin" ] || \
-                 [ -f "$BLANK_EN_DIR/model.safetensors.index.json" ] || \
-                 [ -f "$BLANK_EN_DIR/pytorch_model.bin.index.json" ]; then
-                HAS_QWEN_WEIGHTS="yes"
+              if [ -f "$MODEL_DIR/llm.pt" ]; then
+                HAS_LLM="yes"
               fi
-              if [ "$HAS_MAIN_CONFIG" = "yes" ] && [ "$HAS_QWEN_WEIGHTS" = "yes" ]; then
+              if [ "$HAS_CONFIG" = "yes" ] && [ "$HAS_LLM" = "yes" ]; then
                 echo "Model already present at $MODEL_DIR — skipping download."
                 exit 0
-              fi
-              if [ "$HAS_QWEN_WEIGHTS" = "no" ] && [ -d "$BLANK_EN_DIR" ]; then
-                echo "Partial Qwen weights detected; clearing $BLANK_EN_DIR before re-download."
-                rm -rf "$BLANK_EN_DIR"
               fi
               echo "Downloading {{ $model.modelSource.modelId }} into $MODEL_DIR …"
               pip install --quiet modelscope
@@ -86,12 +87,6 @@ spec:
               snapshot_download(
                   "{{ $model.modelSource.modelId }}",
                   local_dir="{{ $model.mountPath }}/{{ $model.modelSource.modelId }}",
-              )
-              # CosyVoice2 loads this sub-model at runtime; pre-download it so
-              # the worker pod does not need outbound internet access.
-              snapshot_download(
-                  "iic/CosyVoice-BlankEN",
-                  local_dir="{{ $model.mountPath }}/{{ $model.modelSource.modelId }}/CosyVoice-BlankEN",
               )
               PYEOF
               echo "Download complete."
