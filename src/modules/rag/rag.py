@@ -51,8 +51,18 @@ class RAGHandle:
         from qdrant_client import QdrantClient
 
         cfg = self._cfg
+        from urllib.parse import urlparse
+
         self.embedding_url = cfg.embedding_url or cfg.llm_url
-        self._qdrant = QdrantClient(url=cfg.qdrant_url, verify=cfg.verify_ssl)
+        _p = urlparse(cfg.qdrant_url)
+        _is_https = _p.scheme == "https"
+        self._qdrant = QdrantClient(
+            host=_p.hostname,
+            port=_p.port or (443 if _is_https else 6333),
+            https=_is_https,
+            verify=cfg.verify_ssl,
+            check_compatibility=cfg.verify_ssl,
+        )
         print(f"[RAGHandle] Connected to Qdrant at {cfg.qdrant_url}")
         self._embed_client = httpx.AsyncClient(timeout=30.0, verify=cfg.verify_ssl)
         self._llm_client = httpx.AsyncClient(timeout=120.0, verify=cfg.verify_ssl)
@@ -84,6 +94,32 @@ class RAGHandle:
             raise RuntimeError(
                 f"Embedding unexpected schema from {url}: {str(payload)[:1000]}"
             ) from e
+
+    def _get_profile(self, collection: str, _user_id: str) -> list[str]:
+        """Always-on facts about the user (name, etc.).
+
+        Retrieved deterministically by filter — NOT by vector similarity —
+        so they are always available to the prompt regardless of the question.
+        Populated via `ingestion.py profile`.
+        """
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        try:
+            points, _ = self._qdrant.scroll(
+                collection_name=collection,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
+                        FieldCondition(key="type", match=MatchValue(value="profile")),
+                    ]
+                ),
+                limit=50,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception:
+            return []
+        return [p.payload.get("text", "") for p in points if p.payload.get("text")]
 
     def _search(
         self,
@@ -126,11 +162,24 @@ class RAGHandle:
         question: str,
         chunks: list[dict],
         preferences: dict,
+        profile_facts: list[str] | None = None,
     ) -> tuple[str, str]:
-        parts = [
-            "You are a robot speaking to a user. Answer based on the provided context.",
-            "If the context is insufficient, say so clearly.",
-        ]
+        # TEMP TEMP TEMP: this persona should be defined in the configuration
+        persona = preferences.get(
+            "persona",
+            "You are Rat-Man, a witty, charismatic animated rat character. "
+            "You are NOT an AI, an assistant, or a language model, and you must "
+            "never say that you are one. Stay fully in character at all times, "
+            "speak naturally and with personality, and never break the illusion.",
+        )
+        parts = [persona]
+
+        if profile_facts:
+            parts.append(
+                "Here is what you know about the person you're talking to: "
+                + " ".join(profile_facts)
+            )
+
         if preferences.get("language"):
             parts.append(f"Always respond in {preferences['language']}.")
         if preferences.get("tone"):
@@ -141,6 +190,14 @@ class RAGHandle:
             parts.append("Keep your answer to 2-3 sentences maximum.")
         if preferences.get("extra_instructions"):
             parts.append(preferences["extra_instructions"])
+
+        parts.append(
+            "Use the context in the user's message to inform your answers when "
+            "it is relevant, but always answer in character. If you don't know "
+            "something, improvise in character rather than admitting you lack "
+            "information or breaking character."
+            "Make small sentences, and no emojis"
+        )
         system_prompt = " ".join(parts)
 
         if not chunks:
@@ -168,7 +225,7 @@ class RAGHandle:
         return system_prompt, user_prompt
 
     async def _stream_ollama(
-        self, messages: list, max_tokens: int
+        self, messages: list, max_tokens: int, temperature: float = 0.7
     ) -> AsyncGenerator[str, None]:
         async with self._llm_client.stream(
                 "POST",
@@ -177,7 +234,7 @@ class RAGHandle:
                     "model": self._cfg.llm_model,
                     "messages": messages,
                     "stream": True,
-                    "options": {"num_predict": max_tokens, "temperature": 0.1},
+                    "options": {"num_predict": max_tokens, "temperature": temperature},
                 },
             ) as resp:
                 resp.raise_for_status()
@@ -200,6 +257,7 @@ class RAGHandle:
         messages: list,
         max_tokens: int,
         api_key: str = "",
+        temperature: float = 0.7,
     ) -> AsyncGenerator[str, None]:
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -212,7 +270,7 @@ class RAGHandle:
                     "model": self._cfg.llm_model,
                     "messages": messages,
                     "max_tokens": max_tokens,
-                    "temperature": 0.1,
+                    "temperature": temperature,
                     "stream": True,
                 },
             ) as resp:
@@ -242,6 +300,7 @@ class RAGHandle:
         preferences: dict,
     ) -> AsyncGenerator[str, None]:
         max_tokens = preferences.get("max_length", 1024)
+        temperature = preferences.get("temperature", 0.7)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -249,7 +308,10 @@ class RAGHandle:
 
         if self._cfg.llm_provider == "vllm":
             async for d in self._stream_openai_compatible(
-                f"{self._cfg.llm_url}/v1/chat/completions", messages, max_tokens
+                f"{self._cfg.llm_url}/v1/chat/completions",
+                messages,
+                max_tokens,
+                temperature=temperature,
             ):
                 yield d
         elif self._cfg.llm_provider == "api":
@@ -258,10 +320,11 @@ class RAGHandle:
                 messages,
                 max_tokens,
                 self._cfg.llm_api_key,
+                temperature=temperature,
             ):
                 yield d
         elif self._cfg.llm_provider == "ollama":
-            async for d in self._stream_ollama(messages, max_tokens):
+            async for d in self._stream_ollama(messages, max_tokens, temperature):
                 yield d
         else:
             raise ValueError(f"Unknown llm_provider: {self._cfg.llm_provider}")
@@ -282,8 +345,11 @@ class RAGHandle:
             raise
 
         print(f"[RAG] Found {len(chunks)} chunks")
+        profile_facts = self._get_profile(collection, query._user_id)
+        if profile_facts:
+            print(f"[RAG] Loaded {len(profile_facts)} profile fact(s)")
         system_prompt, user_prompt = self._build_prompt(
-            query.question, chunks, query.preferences
+            query.question, chunks, query.preferences, profile_facts
         )
 
         print(f"[RAG] Streaming from LLM at {self._cfg.llm_url} (provider={self._cfg.llm_provider}, model={self._cfg.llm_model})")
@@ -317,6 +383,8 @@ class RAG(ModuleWithHandle, ModuleWithId):
         response_format="paragraph",
         max_length=1024,
         extra_instructions="",
+        persona="",
+        temperature=0.7,
         **kwargs,
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
@@ -327,7 +395,10 @@ class RAG(ModuleWithHandle, ModuleWithId):
             "response_format": response_format,
             "max_length": max_length,
             "extra_instructions": extra_instructions,
+            "temperature": temperature,
         }
+        if persona:
+            self.preferences["persona"] = persona
 
     async def process(self, data: Sentence) -> AsyncGenerator[Token, None]:  # type: ignore[override]
         query = RAGQuery(
