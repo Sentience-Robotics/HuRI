@@ -28,6 +28,15 @@ _BLEND_SEC = float(os.environ.get("HURI_GESTURE_BLEND_SEC", "0.2"))
 # TTS keeps the lion's share. Only applied on CUDA when the value is set (>0).
 _GPU_MEM_FRACTION = float(os.environ.get("HURI_GESTURE_GPU_MEM_FRACTION", "0.0"))
 
+# Source sample rate used to warm the inference path. Real audio arrives from
+# the TTS (CosyVoice ≈ 24 kHz), so every real infer() call resamples to 16 kHz.
+# Warming at 16 kHz — as the old warmup did — skips that resample entirely,
+# leaving librosa's first-call cost to land on the first user-facing gesture.
+# Default to the TTS rate so the resample path is warmed too. Override if your
+# TTS uses a different rate (the exact value only affects which resampler
+# filter is pre-built; the model shapes follow the 16 kHz duration regardless).
+_WARMUP_SRC_SR = int(os.environ.get("HURI_GESTURE_WARMUP_SR", "24000"))
+
 
 @dataclass
 class Motion:
@@ -48,6 +57,19 @@ class GestureDeployment:
     ):
         print(f"[Gesture] importing torch...", flush=True)
         import torch
+
+        # Pin algorithm selection so the kernels warmed below are the same ones
+        # used at serve time. With cudnn.benchmark enabled, cuDNN re-autotunes
+        # for every new input length — and the sliding window feeds a different
+        # length almost every call — so the first inference at each new shape
+        # would stall on autotuning, defeating the warmup. Keep it off (also the
+        # default) and pin it explicitly. TF32 just speeds matmul/conv on
+        # Ampere+ with no meaningful quality impact for gesture.
+        torch.backends.cudnn.benchmark = False
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
         print(f"[Gesture] importing emage...", flush=True)
         from .emage import EmageAudioModel, EmageVAEConv, EmageVQModel, EmageVQVAEConv
 
@@ -99,21 +121,58 @@ class GestureDeployment:
         print(f"[Gesture] ready", flush=True)
 
     def _warmup(self) -> None:
-        # The first inference pays a one-time cold-start cost (CUDA context
-        # init, kernel JIT/load, cuDNN autotuning, caching-allocator warmup)
-        # that can take several seconds. Run a throwaway pass here so that cost
-        # is paid at startup — where we're already blocking on weight loads —
-        # rather than on the first user-facing gesture. Best-effort: a failure
-        # here must never prevent the deployment from coming up.
+        # The first inference pays one-time costs that are *shape- and
+        # path-dependent*: per-input-length kernel/primitive selection (cuDNN
+        # algo pick on GPU, oneDNN primitive build on CPU), librosa's first-call
+        # resampler build, the caching allocator's first growth, and CUDA
+        # context/kernel load. The old warmup ran a single 16 kHz, fixed-length,
+        # no-resample pass — so it warmed exactly one shape on a path real calls
+        # never take. The first real gesture (a different length, arriving at the
+        # TTS rate and therefore resampled) re-paid almost all of it, which is
+        # why the warmup "did nothing".
+        #
+        # Instead, sweep the window lengths the sliding window actually feeds
+        # infer() — from the small first-chunk window up to a full context+chunk
+        # steady-state window — on the *real* resample path, twice (the first
+        # pass pays the costs, the second confirms the path is hot), and
+        # synchronize so the GPU work is finished before we report ready.
+        # Best-effort: a failure here must never prevent the deployment coming up.
         import time
+        import torch
+
+        # Representative window lengths (seconds). The dominant per-window
+        # transformer forward is a fixed shape warmed by any window, but the
+        # trailing remainder forward varies with total length, so warm a spread.
+        secs = sorted({
+            round(s, 3)
+            for s in (
+                _MIN_CHUNK_SEC,                    # first tiny window of an utterance
+                _CONTEXT_SEC,                      # context-only sized window
+                _CONTEXT_SEC + _MIN_CHUNK_SEC,     # steady-state window
+                _CONTEXT_SEC + 2 * _MIN_CHUNK_SEC, # a larger fresh chunk
+            )
+            if s and s > 0
+        }) or [3.0]
 
         try:
-            # ~3 s of silence at 16 kHz exercises the full sliding-window path
-            # (multiple rounds + remainder) the way a real utterance would.
-            dummy = np.zeros(_EMAGE_SR * 3, dtype=np.float32)
             t0 = time.time()
-            self.infer(dummy, source_sr=_EMAGE_SR)
-            print(f"[Gesture] warmup done in {time.time() - t0:.2f}s", flush=True)
+            for pass_idx in range(2):
+                for s in secs:
+                    n = max(1, int(_WARMUP_SRC_SR * s))
+                    dummy = np.zeros(n, dtype=np.float32)
+                    ts = time.time()
+                    self.infer(dummy, source_sr=_WARMUP_SRC_SR)
+                    if self.device.type == "cuda":
+                        torch.cuda.synchronize(self.device)
+                    print(
+                        f"[Gesture] warmup pass {pass_idx} {s:.2f}s "
+                        f"({n} samples @ {_WARMUP_SRC_SR} Hz) in {time.time() - ts:.2f}s",
+                        flush=True,
+                    )
+            print(
+                f"[Gesture] warmup done ({len(secs)} shapes x2) in {time.time() - t0:.2f}s",
+                flush=True,
+            )
         except Exception as e:  # noqa: BLE001 — warmup is an optimisation, never fatal
             print(f"[Gesture] WARNING warmup failed: {e!r}", flush=True)
 
