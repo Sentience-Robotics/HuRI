@@ -32,6 +32,10 @@ class RAGQuery:
     _user_id: str
     question: str
     preferences: dict = field(default_factory=dict)
+    # Prior conversation turns as OpenAI-style messages
+    # ([{"role": "user"|"assistant", "content": str}, ...]). The handle is
+    # stateless, so the per-session RAG module owns and supplies this.
+    history: list = field(default_factory=list)
 
 
 @serve.deployment(name="RAGHandle")
@@ -298,13 +302,14 @@ class RAGHandle:
         system_prompt: str,
         user_prompt: str,
         preferences: dict,
+        history: list | None = None,
     ) -> AsyncGenerator[str, None]:
         max_tokens = preferences.get("max_length", 1024)
         temperature = preferences.get("temperature", 0.7)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+        messages = [{"role": "system", "content": system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": user_prompt})
 
         if self._cfg.llm_provider == "vllm":
             async for d in self._stream_openai_compatible(
@@ -352,10 +357,14 @@ class RAGHandle:
             query.question, chunks, query.preferences, profile_facts
         )
 
-        print(f"[RAG] Streaming from LLM at {self._cfg.llm_url} (provider={self._cfg.llm_provider}, model={self._cfg.llm_model})")
+        print(
+            f"[RAG] Streaming from LLM at {self._cfg.llm_url} "
+            f"(provider={self._cfg.llm_provider}, model={self._cfg.llm_model}, "
+            f"history_msgs={len(query.history)})"
+        )
         try:
             async for delta in self._llm_stream(
-                system_prompt, user_prompt, query.preferences
+                system_prompt, user_prompt, query.preferences, query.history
             ):
                 yield delta
         except Exception:
@@ -385,11 +394,12 @@ class RAG(ModuleWithHandle, ModuleWithId):
         extra_instructions="",
         persona="",
         temperature=0.7,
+        max_history_turns=6,
         **kwargs,
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
 
-        print(f"[RAG] Initialized with user_id={_user_id}, language={language}, tone={tone}, response_format={response_format}, max_length={max_length}, temperature={temperature}")
+        print(f"[RAG] Initialized with user_id={_user_id}, language={language}, tone={tone}, response_format={response_format}, max_length={max_length}, temperature={temperature}, max_history_turns={max_history_turns}")
 
         self.preferences = {
             "language": language,
@@ -402,17 +412,40 @@ class RAG(ModuleWithHandle, ModuleWithId):
         if persona:
             self.preferences["persona"] = persona
 
+        # Per-session conversation memory, kept on the (per-WebSocket) module
+        # instance because the RAGHandle deployment is stateless/shared.
+        # Stored as OpenAI-style messages; trimmed to the last N turns.
+        self._max_history_turns = max_history_turns
+        self.history: list[dict] = []
+
     async def process(self, data: Sentence) -> AsyncGenerator[Token, None]:  # type: ignore[override]
         query = RAGQuery(
             _user_id=self._user_id if self._user_id else "anonymous",
             question=data.text,
             preferences=self.preferences,
+            history=list(self.history),  # snapshot of prior turns
         )
 
+        parts: list[str] = []
         stream = self._handle.options(stream=True).stream.remote(query)
         async for delta in stream:
+            parts.append(delta)
             yield Token(text=delta, end=False)
         yield Token(text="", end=True)
+
+        self._record_turn(data.text, "".join(parts))
+
+    def _record_turn(self, question: str, answer: str) -> None:
+        """Append this turn to the session history (raw Q/A, no RAG context)
+        and trim to the most recent `max_history_turns` exchanges."""
+        answer = answer.strip()
+        if not answer:
+            return
+        self.history.append({"role": "user", "content": question})
+        self.history.append({"role": "assistant", "content": answer})
+        max_msgs = self._max_history_turns * 2
+        if len(self.history) > max_msgs:
+            del self.history[:-max_msgs]
 
     def update_preferences(self, new_preferences: dict):
         self.preferences.update(new_preferences)
