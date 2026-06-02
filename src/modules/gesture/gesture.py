@@ -20,6 +20,10 @@ _EMAGE_FPS = 30    # EMAGE emits motion at 30 fps
 _CONTEXT_SEC = float(os.environ.get("HURI_GESTURE_CONTEXT_SEC", "2.0"))
 _MIN_CHUNK_SEC = float(os.environ.get("HURI_GESTURE_MIN_CHUNK_SEC", "0.5"))
 
+# Seconds over which a fresh window's first frames are eased onto the last
+# emitted pose, killing the seam snap between windows and between utterances.
+_BLEND_SEC = float(os.environ.get("HURI_GESTURE_BLEND_SEC", "0.2"))
+
 # Optional manual GPU split: cap the gesture process to a fraction of the GPU so
 # TTS keeps the lion's share. Only applied on CUDA when the value is set (>0).
 _GPU_MEM_FRACTION = float(os.environ.get("HURI_GESTURE_GPU_MEM_FRACTION", "0.0"))
@@ -174,8 +178,21 @@ class Gesture(ModuleWithHandle):
     primes the model so the seam is continuous; only the motion frames for the
     fresh audio are emitted. The window length is bounded by
     ``context_sec + chunk size`` so inference cost stays flat regardless of
-    utterance length. Global root translation is rebased onto the previously
-    emitted frame to avoid a jump every window.
+    utterance length.
+
+    Seam blending
+    ─────────────
+    Priming with context keeps the *audio* continuous across a window, but the
+    motion still snaps at seams: EMAGE has no future context at a window's right
+    edge, so its last frames wind down differently from how the next window —
+    fully primed — opens, and at utterance boundaries it cold-starts from a rest
+    pose entirely. So each fresh segment is eased onto the previously emitted
+    frame: poses, expressions and root translation all start exactly continuous
+    and a cosine-decaying offset fades to zero over ``blend_sec``, restoring the
+    model's intended motion (and avoiding the cumulative drift a constant rebase
+    would cause). The anchors survive the end-of-utterance reset, so the first
+    window of the next utterance blends out of the pose still on screen instead
+    of teleporting.
 
     input:  audio (Audio)
     output: motion (Motion)
@@ -184,6 +201,7 @@ class Gesture(ModuleWithHandle):
     :device:       PyTorch device string; defaults to CUDA when available.
     :context_sec:  Seconds of prior audio prepended to each window for continuity.
     :min_chunk_sec: Minimum seconds of fresh audio to accumulate before inferring.
+    :blend_sec:    Seconds over which each window's seam is eased onto the prior frame.
     """
 
     _handle_cls = GestureDeployment
@@ -195,10 +213,12 @@ class Gesture(ModuleWithHandle):
         _handle: handle.DeploymentHandle,
         context_sec: float = _CONTEXT_SEC,
         min_chunk_sec: float = _MIN_CHUNK_SEC,
+        blend_sec: float = _BLEND_SEC,
     ):
         super().__init__(_handle)
         self._context_sec = float(context_sec)
         self._min_chunk_sec = float(min_chunk_sec)
+        self._blend_sec = float(blend_sec)
 
         # Per-utterance sliding-window state. All sample counts are in the
         # source sample rate; resampling to 16 kHz happens once inside infer().
@@ -207,14 +227,23 @@ class Gesture(ModuleWithHandle):
         self._buffer = np.empty(0, dtype=np.float32)  # trailing audio (ctx + unprocessed)
         self._buf_start = 0       # source-sr sample index of buffer[0] in utterance timeline
         self._emitted = 0         # source-sr samples whose motion has been emitted
-        self._trans_anchor: Optional[np.ndarray] = None  # last emitted trans, for continuity
 
-    def _reset(self) -> None:
+        # Last emitted frame per channel, used to ease the next segment's seam.
+        # These persist across the end-of-utterance reset (see _end_utterance) so
+        # gestures stay continuous when a new utterance starts.
+        self._trans_anchor: Optional[np.ndarray] = None
+        self._pose_anchor: Optional[np.ndarray] = None
+        self._expr_anchor: Optional[np.ndarray] = None
+
+    def _end_utterance(self) -> None:
+        # Reset only per-utterance buffering/timeline state. The seam anchors
+        # deliberately survive so the first window of the next utterance eases
+        # out of the pose currently on screen instead of snapping to EMAGE's
+        # cold-start rest pose.
         self._sr = None
         self._buffer = np.empty(0, dtype=np.float32)
         self._buf_start = 0
         self._emitted = 0
-        self._trans_anchor = None
 
     async def process(self, audio: Audio) -> AsyncGenerator[Motion, None]:  # type: ignore[override]
         # Each chunk arrives as its own process() task on the shared per-session
@@ -233,7 +262,7 @@ class Gesture(ModuleWithHandle):
             if sr is None:
                 # Nothing buffered yet (e.g. a lone end marker). Reset and bail.
                 if end_of_utterance:
-                    self._reset()
+                    self._end_utterance()
                 return
 
             ctx_samples = int(self._context_sec * sr)
@@ -245,7 +274,7 @@ class Gesture(ModuleWithHandle):
             # Wait for more audio unless this is the final flush of the utterance.
             if new_samples <= 0 or (not end_of_utterance and new_samples < min_new_samples):
                 if end_of_utterance:
-                    self._reset()
+                    self._end_utterance()
                 return
 
             motion = await self._infer_window(sr, ctx_samples, global_end)
@@ -253,7 +282,7 @@ class Gesture(ModuleWithHandle):
                 yield motion
 
             if end_of_utterance:
-                self._reset()
+                self._end_utterance()
 
     async def _infer_window(
         self, sr: int, ctx_samples: int, global_end: int
@@ -267,27 +296,50 @@ class Gesture(ModuleWithHandle):
         motion: Motion = await self._handle.infer.remote(window, sr)
         total_frames = motion.poses.shape[0]
 
+        # EMAGE's internal windowing (EmageAudioModel.inference) emits a
+        # contiguous *prefix* of the requested window and silently drops up to
+        # ~2*seed_frames frames off the END whenever the trailing partial window
+        # is shorter than its motion seed. So the returned frames cover only
+        # [win_start, win_start + total_frames] — not necessarily the whole
+        # window. Map emission off the actual frame count, not the requested
+        # length: otherwise the freshest motion is dropped while _emitted skips
+        # over it, tearing a hole in the timeline that reads as a freeze-then-
+        # jump (and drifts gesture out of sync with speech).
+        covered_end = win_start + int(round(total_frames * sr / motion.fps))
+
         # Drop the leading frames that correspond to the context (already emitted).
         skip_sec = (self._emitted - win_start) / sr
         skip_frames = int(round(skip_sec * motion.fps))
         skip_frames = max(0, min(skip_frames, total_frames))
 
-        poses = motion.poses[skip_frames:]
-        expressions = motion.expressions[skip_frames:]
+        poses = motion.poses[skip_frames:].copy()
+        expressions = motion.expressions[skip_frames:].copy()
         trans = motion.trans[skip_frames:].copy()
 
-        # Advance the timeline even if rounding left no new frames to emit.
-        self._emitted = global_end
-        self._trim_buffer(ctx_samples, global_end)
+        # Advance only past audio the model actually turned into motion; any
+        # dropped tail stays buffered and is re-inferred next window, this time
+        # with real right-context. Cap at global_end so rounding can't overrun
+        # the buffer, and never move backwards.
+        self._emitted = min(global_end, max(self._emitted, covered_end))
+        self._trim_buffer(ctx_samples)
 
         if poses.shape[0] == 0:
             return None
 
-        # Rebase global translation onto the last emitted frame: every window
-        # restarts root motion near the origin, so without this the avatar would
-        # teleport back at each seam.
-        if self._trans_anchor is not None:
-            trans += self._trans_anchor - trans[0]
+        # Ease this segment's seam onto the last emitted frame. Poses and
+        # expressions snap because EMAGE regenerates the boundary without the
+        # right-context the next window will have (and cold-starts across
+        # utterances); root translation snaps because every window restarts near
+        # the origin. Blending all three keeps the seam continuous, and the
+        # decaying (vs. constant) offset returns to the model's intended motion
+        # so root translation doesn't accumulate drift across windows.
+        blend_frames = int(round(self._blend_sec * motion.fps))
+        self._blend_into(poses, self._pose_anchor, blend_frames)
+        self._blend_into(expressions, self._expr_anchor, blend_frames)
+        self._blend_into(trans, self._trans_anchor, blend_frames)
+
+        self._pose_anchor = poses[-1].copy()
+        self._expr_anchor = expressions[-1].copy()
         self._trans_anchor = trans[-1].copy()
 
         out = Motion(
@@ -299,9 +351,34 @@ class Gesture(ModuleWithHandle):
         )
         return out
 
-    def _trim_buffer(self, ctx_samples: int, global_end: int) -> None:
-        # Keep only the trailing context so the next window stays bounded.
-        keep_from = global_end - ctx_samples
+    @staticmethod
+    def _blend_into(
+        arr: np.ndarray, anchor: Optional[np.ndarray], blend_frames: int
+    ) -> None:
+        """Ease the start of a fresh segment onto ``anchor`` in place.
+
+        Frame 0 is shifted to equal ``anchor`` (a continuous seam) and the
+        offset fades to zero over ``blend_frames`` with a cosine ease — zero
+        slope at both ends, so neither the value nor its velocity jumps — after
+        which the segment is the model's untouched output.
+
+        Poses are SMPL-X axis-angle, so this is a linear blend in axis-angle
+        space: exact only for small seam offsets, which is the regime here since
+        consecutive frames are already close. A quaternion slerp would be needed
+        for large discontinuities but is overkill for seam clean-up.
+        """
+        if anchor is None or blend_frames <= 0 or arr.shape[0] == 0:
+            return
+        n = min(blend_frames, arr.shape[0])
+        w = 0.5 * (1.0 + np.cos(np.pi * np.linspace(0.0, 1.0, n, dtype=arr.dtype)))
+        arr[:n] += w[:, None] * (anchor - arr[0])
+
+    def _trim_buffer(self, ctx_samples: int) -> None:
+        # Keep one context window of audio before the last *emitted* sample so
+        # the next window stays bounded — but never discard audio whose motion
+        # hasn't been emitted yet (the dropped tail above lives between
+        # _emitted and the buffer end).
+        keep_from = self._emitted - ctx_samples
         if keep_from > self._buf_start:
             self._buffer = self._buffer[keep_from - self._buf_start :]
             self._buf_start = keep_from
