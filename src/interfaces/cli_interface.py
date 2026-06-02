@@ -92,7 +92,7 @@ class AudioHook(ClientHook[bytes]):
             int(len(audio) * self.sample_rate / self.incoming_sample_rate),
         ).astype(np.int16)
 
-    async def hook(self, singletton: None, data: bytes):
+    async def hook(self, data: bytes):
         audio = np.frombuffer(data, dtype=np.int16)
 
         audio = self.resample_function(audio)
@@ -106,7 +106,7 @@ class TextHook(ClientHook[RAGResult]):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    async def hook(self, singletton: None, data: RAGResult):
+    async def hook(self, data: RAGResult):
         print("<<", data.answer)
 
 

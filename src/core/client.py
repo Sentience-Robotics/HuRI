@@ -23,12 +23,18 @@ class ClientSender(Generic[T]):
 
     Class derived from ClientSender must implement input_loop,
     and use ClientSender.send to send data to HuRI.
+
+    `singletton` is available to access shared ressources.
     """
 
     output_type: Type[T]
 
-    def __init__(self, topic: str, **_):
+    def __init__(self, topic: str, singletton: Any, **_):
+        """
+        :topic: topic sent to HuRI
+        :singletton: allow to get shared ressources"""
         self.topic = topic
+        self.singletton = singletton
 
     async def input_loop(self, ws: websockets.ClientConnection):
         raise NotImplementedError
@@ -59,16 +65,15 @@ class ClientHook(Generic[T]):
 
     Class derived from ClientHook must implement hook.
 
-    `singletton` allow hooks to modifies shared ressources,
-    and comes from the used interface.
+    `singletton` is available to access and modifies shared ressources.
     """
 
     input_type: Type[T]
 
-    def __init__(self, **_):
-        pass
+    def __init__(self, singletton: Any, **_):
+        self.singletton = singletton
 
-    async def hook(self, singletton: Any, data: T):
+    async def hook(self, data: T):
         raise NotImplementedError
 
 
@@ -87,11 +92,11 @@ class Client:
         module = importlib.import_module(module_path)
         interface = getattr(module, object_name)
 
-        self.singletton = interface.singletton
-
         available_senders = interface.get_senders()
         self.senders: List[ClientSender] = [
-            available_senders[sender.name](topic=sender.topic, **sender.args)
+            available_senders[sender.name](
+                topic=sender.topic, singletton=interface.singletton, **sender.args
+            )
             for sender in self.config.senders.values()
         ]
 
@@ -99,7 +104,11 @@ class Client:
         self.hooks: Dict[str, List[ClientHook]] = defaultdict(list)
         for hook in self.config.hooks.values():
             for topic in hook.topics:
-                self.hooks[topic].append(available_hooks[hook.name](**hook.args))
+                self.hooks[topic].append(
+                    available_hooks[hook.name](
+                        singletton=interface.singletton, **hook.args
+                    )
+                )
 
         self.user_id_file = user_id_file
 
@@ -131,7 +140,7 @@ class Client:
                 for hook in self.hooks[topic]:
                     if not isinstance(data, bytes):
                         data = hook.input_type(**data)
-                    asyncio.create_task(hook.hook(self.singletton, data))
+                    asyncio.create_task(hook.hook(data))
 
         except (asyncio.CancelledError, websockets.ConnectionClosedOK):
             pass
