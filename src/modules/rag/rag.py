@@ -1,4 +1,6 @@
 import json
+import os
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 
@@ -9,6 +11,22 @@ from ray.serve import handle
 from src.core.module import ModuleWithHandle, ModuleWithId
 from src.modules.speech_to_text.events import Sentence
 from src.modules.text_to_speech.events import Token
+
+import httpx
+
+from qdrant_client.models import FieldCondition, Filter, MatchValue
+from .qdrant_utils import make_qdrant_client
+
+# Default character persona. Overridable per session via the `persona` key in the
+# client config's module args, or globally via HURI_RAG_DEFAULT_PERSONA in the
+# Serve app runtime_env.env_vars (see deploy values.yaml) — no rebuild needed.
+_DEFAULT_PERSONA = os.environ.get(
+    "HURI_RAG_DEFAULT_PERSONA",
+    "You are Mouse-Man, a witty, charismatic animated mouse character. "
+    "You are NOT an AI, an assistant, or a language model, and you must "
+    "never say that you are one. Stay fully in character at all times, "
+    "speak naturally and with personality, and never break the illusion.",
+)
 
 
 class RAGDeploymentConfig(BaseModel):
@@ -51,22 +69,9 @@ class RAGHandle:
         self._apply_config()
 
     def _apply_config(self) -> None:
-        import httpx
-        from qdrant_client import QdrantClient
-
         cfg = self._cfg
-        from urllib.parse import urlparse
-
         self.embedding_url = cfg.embedding_url or cfg.llm_url
-        _p = urlparse(cfg.qdrant_url)
-        _is_https = _p.scheme == "https"
-        self._qdrant = QdrantClient(
-            host=_p.hostname,
-            port=_p.port or (443 if _is_https else 6333),
-            https=_is_https,
-            verify=cfg.verify_ssl,
-            check_compatibility=cfg.verify_ssl,
-        )
+        self._qdrant = make_qdrant_client(cfg.qdrant_url, cfg.verify_ssl)
         print(f"[RAGHandle] Connected to Qdrant at {cfg.qdrant_url}")
         self._embed_client = httpx.AsyncClient(timeout=30.0, verify=cfg.verify_ssl)
         self._llm_client = httpx.AsyncClient(timeout=120.0, verify=cfg.verify_ssl)
@@ -106,8 +111,6 @@ class RAGHandle:
         so they are always available to the prompt regardless of the question.
         Populated via `ingestion.py profile`.
         """
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
-
         try:
             points, _ = self._qdrant.scroll(
                 collection_name=collection,
@@ -134,8 +137,6 @@ class RAGHandle:
     ) -> list[dict]:
         qdrant_filter: Any = None
         if filters:
-            from qdrant_client.models import FieldCondition, Filter, MatchValue
-
             conditions: Any = [
                 FieldCondition(key=k, match=MatchValue(value=v))
                 for k, v in filters.items()
@@ -168,14 +169,7 @@ class RAGHandle:
         preferences: dict,
         profile_facts: list[str] | None = None,
     ) -> tuple[str, str]:
-        # TEMP TEMP TEMP: this persona should be defined in the configuration
-        persona = preferences.get(
-            "persona",
-            "You are Rat-Man, a witty, charismatic animated rat character. "
-            "You are NOT an AI, an assistant, or a language model, and you must "
-            "never say that you are one. Stay fully in character at all times, "
-            "speak naturally and with personality, and never break the illusion.",
-        )
+        persona = preferences.get("persona", _DEFAULT_PERSONA)
         parts = [persona]
 
         if profile_facts:
@@ -336,8 +330,6 @@ class RAGHandle:
 
     async def stream(self, query: RAGQuery) -> AsyncGenerator[str, None]:
         """Main streaming entry point — yields LLM text deltas."""
-        import traceback
-
         print(f"[RAG] Question: {query.question}")
 
         collection, filters = self._resolve_user_context(query._user_id)

@@ -1,8 +1,10 @@
 from typing import Any, Dict, List, Mapping, Type
 
+from ray.serve import handle
+
 from src.core.dataclasses.config import ModuleConfig
 from src.core.events import EventData
-from src.core.module import Module, ModuleWithHandle, ModuleWithId, handle
+from src.core.module import Module, ModuleWithHandle, ModuleWithId
 
 
 class EventDataFactory:

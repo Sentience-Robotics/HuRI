@@ -185,7 +185,8 @@ def ingest_chunks(
 def chunk_strat(text: str, args, model: Any) -> list[str] | Any:
     """Pick the right chunking strategy based on args."""
     if args.chunking == "semantic":
-        from semantic_chunker import SemanticChunker
+        # Thomas: I need to import here, bceause it takes too much time earlier, or use a jupyter notebook to do it instead
+        from .semantic_chunker import SemanticChunker
 
         chunker = SemanticChunker(
             model=model,
@@ -513,23 +514,11 @@ def main():
     print(f"User: {_user_id}")
 
     verify_ssl = not args.no_verify_ssl
-    # Parse the URL explicitly so QdrantClient gets the correct host/port/https.
-    # When given just "https://host" with no port, some qdrant-client versions
-    # silently fall back to their default port (6333) instead of 443, causing
-    # a timeout that looks like an SSL issue.
-    from urllib.parse import urlparse
-
-    _parsed = urlparse(args.qdrant_url)
-    _is_https = _parsed.scheme == "https"
-    _host = _parsed.hostname
-    _port = _parsed.port or (443 if _is_https else 6333)
-    client = QdrantClient(
-        host=_host,
-        port=_port,
-        https=_is_https,
-        verify=verify_ssl,
-        check_compatibility=verify_ssl,
-    )
+    try:
+        from .qdrant_utils import make_qdrant_client
+    except ImportError:
+        from qdrant_utils import make_qdrant_client
+    client = make_qdrant_client(args.qdrant_url, verify_ssl)
 
     # Lazy-load the model only if the command needs embeddings.
     # Commands that don't need it: list, delete, profile (doesn't use embeddings).

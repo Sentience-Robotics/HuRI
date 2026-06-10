@@ -3,6 +3,8 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 
+import numpy as np
+
 from .module import Module
 
 logger = logging.getLogger("ray.serve")
@@ -91,7 +93,6 @@ class EventGraph:
 def _summarize(item) -> str:
     """Short repr that avoids dumping full numpy arrays into the log."""
     cls = type(item).__name__
-    import numpy as np
     data = getattr(item, "data", None)
     if isinstance(data, np.ndarray):
         return f"{cls}(shape={data.shape}, dtype={data.dtype})"

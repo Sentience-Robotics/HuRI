@@ -1,10 +1,10 @@
 import asyncio
-import logging
 import os
 import queue
 import sys
+import traceback
 import uuid
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 import numpy as np
 from ray import serve
@@ -14,35 +14,28 @@ from src.core.module import ModuleWithHandle
 
 from .events import Audio, Token
 
-logger = logging.getLogger("ray.serve")
-logger.setLevel(os.environ.get("HURI_TTS_LOG_LEVEL", "INFO").upper())
-
-
-def _trace(msg: str) -> None:
-    """Belt-and-braces log: hits both the ray.serve logger AND stdout.
-
-    Ray Serve captures stdout per replica and surfaces it in the dashboard's
-    Logs tab — that's the path that survives any logger misconfiguration.
-    """
-    logger.info(msg)
-    print(f"[TTS] {msg}", flush=True)
-
-
 # Defaults — overridden by env vars in production (see README.md)
 _MODEL_PATH = os.environ.get(
     "HURI_MODEL_PATH", "/models/cosytts/FunAudioLLM/Fun-CosyVoice3-0.5B-2512"
 )
 _VOICE_SAMPLE_PATH = os.environ.get("HURI_VOICE_SAMPLE_PATH", "/assets/voice.wav")
-# CosyVoice3 expects "<instruction><|endofprompt|><transcript-of-voice.wav>". If the
-# config supplies a bare transcript (no marker), prepend the default instruction so the
-# transcript lands AFTER <|endofprompt|> — otherwise the LM treats it as an instruction
-# and intermittently renders it as speech (prompt leakage). The transcription is a must.
-_raw_transcript = os.environ["HURI_VOICE_TRANSCRIPT"]
-_VOICE_SAMPLE_TRANSCRIPT = (
-    _raw_transcript
-    if "<|endofprompt|>" in _raw_transcript
-    else f"You are a helpful assistant.<|endofprompt|>{_raw_transcript}"
-)
+_DEFAULT_INSTRUCTION = "You are a helpful assistant."
+
+
+def _normalize_transcript(raw: str) -> str:
+    """Make a reference transcript safe for CosyVoice3.
+
+    CosyVoice3 expects "<instruction><|endofprompt|><transcript-of-voice.wav>".
+    If the configured transcript supplies a bare transcript (no marker), prepend
+    the default instruction so the transcript lands AFTER <|endofprompt|> —
+    otherwise the LM treats it as an instruction and intermittently renders it as
+    speech (prompt leakage).
+    """
+    return (
+        raw
+        if "<|endofprompt|>" in raw
+        else f"{_DEFAULT_INSTRUCTION}<|endofprompt|>{raw}"
+    )
 
 _END_TEXT = object()   # sentinel pushed into the text queue to close synth
 _END_AUDIO = object()  # sentinel pushed into the audio queue when synth completes
@@ -64,22 +57,34 @@ class TTSDeployment:
         self,
         model_path: str = _MODEL_PATH,
         voice_sample_path: str = _VOICE_SAMPLE_PATH,
-        voice_sample_transcript: str = _VOICE_SAMPLE_TRANSCRIPT,
+        voice_sample_transcript: Optional[str] = None,
     ):
-        _trace(f"TTSDeployment init: model_path={model_path} voice={voice_sample_path} transcript={voice_sample_transcript}")
+        # Resolve the reference transcript here (deploy time on the GPU worker)
+        # rather than at module import: importing this module must not require
+        # HURI_VOICE_TRANSCRIPT, since modules.py imports it inside a broad
+        # try/except that would otherwise make TTS silently vanish from the
+        # pipeline when the var is unset. Fail loudly and locally instead.
+        if voice_sample_transcript is None:
+            raw = os.environ.get("HURI_VOICE_TRANSCRIPT")
+            if not raw:
+                raise RuntimeError(
+                    "HURI_VOICE_TRANSCRIPT is not set. The TTS deployment needs the "
+                    "transcript of the reference voice sample (voice.wav). Set it in "
+                    "the Serve app runtime_env.env_vars (see deploy values.yaml)."
+                )
+            voice_sample_transcript = raw
+        voice_sample_transcript = _normalize_transcript(voice_sample_transcript)
 
         cosy_dir = os.environ.get("HURI_COSY_DIR")
         if cosy_dir:
             matcha_path = os.path.join(cosy_dir, "third_party", "Matcha-TTS")
             if os.path.isdir(matcha_path) and matcha_path not in sys.path:
                 sys.path.insert(0, matcha_path)
-                logger.debug("Added Matcha-TTS path to sys.path: %s", matcha_path)
 
         from cosyvoice.cli.cosyvoice import CosyVoice3
 
         self.model = CosyVoice3(model_dir=model_path, load_trt=False)
         self.sample_rate: int = self.model.sample_rate
-        _trace(f"CosyVoice3 loaded (sample_rate={self.sample_rate})")
 
         self.prompt_speech = voice_sample_path
         self.prompt_text: str = voice_sample_transcript
@@ -91,33 +96,26 @@ class TTSDeployment:
 
     async def start_session(self, session_id: str) -> None:
         self._text_queues[session_id] = queue.Queue()
-        _trace(f"[{session_id}] session started (active={len(self._text_queues)})")
 
     async def push_text(self, session_id: str, text: str, end: bool) -> None:
         q = self._text_queues.get(session_id)
         if q is None:
-            _trace(f"[{session_id}] WARNING push_text on unknown session (text={text!r} end={end})")
             return
         if text:
             q.put(text)
-            _trace(f"[{session_id}] push_text {text!r} (qsize={q.qsize()})")
         if end:
             q.put(_END_TEXT)
-            _trace(f"[{session_id}] push_text: end-of-stream sentinel")
 
     async def stream_audio(self, session_id: str) -> AsyncGenerator[Audio, None]:
         text_q = self._text_queues[session_id]
         loop = asyncio.get_running_loop()
         chunk_count = 0
-        _trace(f"[{session_id}] stream_audio: starting CosyVoice inference")
 
         def text_gen():
             while True:
                 item = text_q.get()
                 if item is _END_TEXT:
-                    _trace(f"[{session_id}] text_gen: received end sentinel")
                     return
-                _trace(f"[{session_id}] text_gen yielding: {item!r}")
                 yield item
 
         try:
@@ -134,18 +132,12 @@ class TTSDeployment:
                 assert isinstance(result, dict)
                 chunk_count += 1
                 speech = result["tts_speech"].squeeze(0).numpy().astype(np.float32)
-                _trace(
-                    f"[{session_id}] audio chunk #{chunk_count}: "
-                    f"{speech.shape[0]} samples (~{speech.shape[0] / self.sample_rate:.2f}s)"
-                )
                 yield Audio(data=speech, sample_rate=self.sample_rate)
-        except Exception as e:
-            _trace(f"[{session_id}] stream_audio FAILED: {e!r}")
-            logger.exception("[%s] stream_audio failed", session_id)
+        except Exception:
+            traceback.print_exc()
             raise
         finally:
             self._text_queues.pop(session_id, None)
-            _trace(f"[{session_id}] stream_audio finished (chunks={chunk_count})")
 
 
 class TTS(ModuleWithHandle):
@@ -189,7 +181,7 @@ class TTS(ModuleWithHandle):
             if is_first:
                 self._session_id = str(uuid.uuid4())
                 self._audio_q = asyncio.Queue()
-                print(f"[TTS-client] [{self._session_id}] opening new utterance session", flush=True)
+                print(f"[TTS-client] [{self._session_id}] opening new utterance session")
                 await self._handle.start_session.remote(self._session_id)
                 self._stream_task = asyncio.create_task(
                     self._drain_audio(self._session_id, self._audio_q)
@@ -198,7 +190,7 @@ class TTS(ModuleWithHandle):
             sid = self._session_id
             audio_q = self._audio_q
             stream_task = self._stream_task
-            print(f"[TTS-client] [{sid}] push token: {token.text!r} (end={token.end})", flush=True)
+            print(f"[TTS-client] [{sid}] push token: {token.text!r} (end={token.end})")
             await self._handle.push_text.remote(sid, token.text, token.end)
 
         if not is_first:
@@ -212,10 +204,10 @@ class TTS(ModuleWithHandle):
                 if item is _END_AUDIO:
                     break
                 count += 1
-                print(f"[TTS-client] [{sid}] yield chunk #{count}", flush=True)
+                print(f"[TTS-client] [{sid}] yield chunk #{count}")
                 yield item
             await stream_task
-            print(f"[TTS-client] [{sid}] utterance complete ({count} chunks)", flush=True)
+            print(f"[TTS-client] [{sid}] utterance complete ({count} chunks)")
 
             sample_rate = await self._handle.get_sample_rate.remote()
             yield Audio(data=np.array([], dtype=np.float32), sample_rate=sample_rate, end=True)
@@ -237,12 +229,11 @@ class TTS(ModuleWithHandle):
                 print(
                     f"[TTS-client] [{session_id}] drain received chunk #{count} "
                     f"pts={audio.pts:.3f}s next={pts:.3f}s",
-                    flush=True,
                 )
                 await audio_q.put(audio)
         except Exception as e:
-            print(f"[TTS-client] [{session_id}] drain task FAILED: {e!r}", flush=True)
+            print(f"[TTS-client] [{session_id}] drain task FAILED: {e!r}")
             raise
         finally:
             await audio_q.put(_END_AUDIO)
-            print(f"[TTS-client] [{session_id}] drain task finished", flush=True)
+            print(f"[TTS-client] [{session_id}] drain task finished")

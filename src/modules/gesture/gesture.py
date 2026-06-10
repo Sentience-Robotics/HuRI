@@ -55,7 +55,7 @@ class GestureDeployment:
         device: Optional[str] = None,
         gpu_mem_fraction: float = _GPU_MEM_FRACTION,
     ):
-        print(f"[Gesture] importing torch...", flush=True)
+        print(f"[Gesture] importing torch...")
         import torch
 
         # Pin algorithm selection so the kernels warmed below are the same ones
@@ -70,13 +70,13 @@ class GestureDeployment:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
 
-        print(f"[Gesture] importing emage...", flush=True)
+        print(f"[Gesture] importing emage...")
         from .emage import EmageAudioModel, EmageVAEConv, EmageVQModel, EmageVQVAEConv
 
         self.device = torch.device(
             device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         )
-        print(f"[Gesture] device={self.device} hf_repo={hf_repo!r}", flush=True)
+        print(f"[Gesture] device={self.device} hf_repo={hf_repo!r}")
 
         # Manual GPU split: cap this process' share of GPU memory so the audio
         # (TTS) path keeps the rest. num_gpus in the Ray serveConfig handles
@@ -88,20 +88,19 @@ class GestureDeployment:
                 )
                 print(
                     f"[Gesture] GPU memory fraction capped at {gpu_mem_fraction:.2f}",
-                    flush=True,
                 )
             except Exception as e:  # noqa: BLE001 — best-effort knob, never fatal
-                print(f"[Gesture] WARNING could not cap GPU memory: {e!r}", flush=True)
+                print(f"[Gesture] WARNING could not cap GPU memory: {e!r}")
 
-        print("[Gesture] loading face_vq...", flush=True)
+        print("[Gesture] loading face_vq...")
         face_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/face").to(self.device)
-        print("[Gesture] loading upper_vq...", flush=True)
+        print("[Gesture] loading upper_vq...")
         upper_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/upper").to(self.device)
-        print("[Gesture] loading lower_vq...", flush=True)
+        print("[Gesture] loading lower_vq...")
         lower_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/lower").to(self.device)
-        print("[Gesture] loading hands_vq...", flush=True)
+        print("[Gesture] loading hands_vq...")
         hands_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/hands").to(self.device)
-        print("[Gesture] loading global_ae...", flush=True)
+        print("[Gesture] loading global_ae...")
         global_ae = EmageVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/global").to(self.device)
 
         self.motion_vq = EmageVQModel(
@@ -113,12 +112,12 @@ class GestureDeployment:
         )
         self.motion_vq.eval()
 
-        print("[Gesture] loading EmageAudioModel...", flush=True)
+        print("[Gesture] loading EmageAudioModel...")
         self.model = EmageAudioModel.from_pretrained(hf_repo).to(self.device)
         self.model.eval()
 
         self._warmup()
-        print(f"[Gesture] ready", flush=True)
+        print(f"[Gesture] ready")
 
     def _warmup(self) -> None:
         # The first inference pays one-time costs that are *shape- and
@@ -167,14 +166,12 @@ class GestureDeployment:
                     print(
                         f"[Gesture] warmup pass {pass_idx} {s:.2f}s "
                         f"({n} samples @ {_WARMUP_SRC_SR} Hz) in {time.time() - ts:.2f}s",
-                        flush=True,
                     )
             print(
                 f"[Gesture] warmup done ({len(secs)} shapes x2) in {time.time() - t0:.2f}s",
-                flush=True,
             )
         except Exception as e:  # noqa: BLE001 — warmup is an optimisation, never fatal
-            print(f"[Gesture] WARNING warmup failed: {e!r}", flush=True)
+            print(f"[Gesture] WARNING warmup failed: {e!r}")
 
     def infer(self, audio_np: np.ndarray, source_sr: int = _EMAGE_SR) -> Motion:
         import torch
