@@ -5,8 +5,8 @@
 # Does NOT include CosyVoice2 or EMAGE — those run on the NVIDIA worker.
 
 # --- RAG / LLM ---
-httpx==0.27.2
-qdrant-client==1.18.0
+# httpx + qdrant-client moved to serve_requirements.txt so the head/base
+# controller can import rag.py without falling back to None (see that file).
 sentence-transformers==3.2.1
 pypdf==5.1.0
 semantic_chunker==0.2.0

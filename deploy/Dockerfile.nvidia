@@ -10,6 +10,9 @@ RUN pip install --no-cache-dir \
     --extra-index-url https://pypi.ngc.nvidia.com \
     -r requirements-nvidia.txt
 
+COPY serve_requirements.txt /app
+RUN pip install --no-cache-dir -r serve_requirements.txt
+
 USER root
 
 RUN apt-get update && apt-get install -y --no-install-recommends git \
