@@ -9,8 +9,6 @@ from urllib.parse import urlparse
 
 from qdrant_client import QdrantClient
 
-with open("portal.tmp", 'w') as f:
-    f.write("WTFF SWORKS ,??,,\n")
 
 def make_qdrant_client(qdrant_url: str, verify_ssl: bool = True) -> QdrantClient:
     """Build a :class:`QdrantClient` from a URL.
