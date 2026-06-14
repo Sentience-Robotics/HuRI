@@ -9,8 +9,8 @@ from ray import serve
 from ray.serve import handle
 
 from src.core.module import ModuleWithHandle, ModuleWithId
-from src.modules.text_to_speech.events import Token
-from .events import RAGResult, RAGQuestion
+
+from .events import RAGQuestion, RAGResult
 
 import httpx
 

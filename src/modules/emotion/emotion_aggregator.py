@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Optional
+from typing import Dict, Optional
 
 from src.core.module import Module
 from src.modules.rag.events import PartialQuestion
@@ -14,6 +14,11 @@ class EAG(Module):
 
     input: emotion,
     output: partial_question
+
+    :ema_alpha: if not None, the aggragation will use ema computation instead
+    of average. Recents emotion will have stronger impact on the final score.
+    Lower alpha will make impact lower, and higher alpha will make it higher. \
+    Default alpha would be ~0.3.
     """
 
     input_type = "emotion"
@@ -22,8 +27,8 @@ class EAG(Module):
     def __init__(self, ema_alpha: Optional[float] = None):
         super().__init__()
 
-        self.scores = defaultdict(float)
-        self.count = 0
+        self.scores: Dict[str, float] = defaultdict(float)
+        self.count: int = 0
 
         self.ema_alpha = ema_alpha
 
@@ -34,7 +39,7 @@ class EAG(Module):
             else self.scores
         )
 
-        best_label = max(avg_scores, key=avg_scores.get)
+        best_label = max(avg_scores, key=lambda label: avg_scores[label])
 
         result = Emotion(
             label=best_label,

@@ -59,7 +59,7 @@ class EMO(Module):
             logits = self.model(**inputs).logits
             probs = torch.softmax(logits, dim=-1)[0]
 
-        predicted_id = torch.argmax(probs).item()
+        predicted_id = int(torch.argmax(probs).item())
 
         labels = self.model.config.id2label
 
