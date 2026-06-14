@@ -70,6 +70,8 @@ class STT(ModuleWithHandle):
         as "en" or "fr".
     :sample_rate: size of received voice audio. Usually 8000, 16000 or 48000.
     :block_duration: size of received voice audio (in s).
+    :transcribe_window: duration of audio per transcription (in s).
+    :transcribe_step: overlap between consecutive transcription windows (in s).
     """
 
     _handle_cls = STTDeployment

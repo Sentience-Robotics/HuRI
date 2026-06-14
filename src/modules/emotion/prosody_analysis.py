@@ -18,6 +18,11 @@ class EMO(Module):
 
     input: voice,
     output: emotion
+
+    :model_name: name of the Emotion Analysis model.
+    :sample_rate: size of received voice audio. Usually 8000, 16000 or 48000.
+    :block_duration: size of received voice audio (in s).
+    :analysis_window: duration of audio per analysis (in s).
     """
 
     input_type = "voice"
@@ -28,7 +33,7 @@ class EMO(Module):
         model_name: str = "superb/hubert-large-superb-er",
         sample_rate: int = 16000,
         block_duration: float = 0.020,  # s
-        analysis_window: float = 5.0,  # s
+        analysis_window: float = 4.0,  # s
     ):
         super().__init__()
 
