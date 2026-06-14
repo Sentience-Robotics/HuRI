@@ -59,6 +59,14 @@ class TTSDeployment:
         voice_sample_path: str = _VOICE_SAMPLE_PATH,
         voice_sample_transcript: Optional[str] = None,
     ):
+        cosy_dir = os.environ.get("HURI_COSY_DIR")
+        if cosy_dir:
+            matcha_path = os.path.join(cosy_dir, "third_party", "Matcha-TTS")
+            if os.path.isdir(matcha_path) and matcha_path not in sys.path:
+                sys.path.insert(0, matcha_path)
+
+        from cosyvoice.cli.cosyvoice import CosyVoice3
+    
         # Resolve the reference transcript here (deploy time on the GPU worker)
         # rather than at module import: importing this module must not require
         # HURI_VOICE_TRANSCRIPT, since modules.py imports it inside a broad
@@ -74,14 +82,6 @@ class TTSDeployment:
                 )
             voice_sample_transcript = raw
         voice_sample_transcript = _normalize_transcript(voice_sample_transcript)
-
-        cosy_dir = os.environ.get("HURI_COSY_DIR")
-        if cosy_dir:
-            matcha_path = os.path.join(cosy_dir, "third_party", "Matcha-TTS")
-            if os.path.isdir(matcha_path) and matcha_path not in sys.path:
-                sys.path.insert(0, matcha_path)
-
-        from cosyvoice.cli.cosyvoice import CosyVoice3
 
         self.model = CosyVoice3(model_dir=model_path, load_trt=False)
         self.sample_rate: int = self.model.sample_rate

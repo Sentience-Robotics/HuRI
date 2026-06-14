@@ -1,1 +1,2 @@
-from .gesture import Gesture, Motion
+from .events import Motion
+from .gesture import Gesture

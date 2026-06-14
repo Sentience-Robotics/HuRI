@@ -7,13 +7,13 @@ import numpy as np
 from ray import serve
 from ray.serve import handle
 
-from src.core.module import Module, ModuleWithHandle
+from src.core.module import ModuleWithHandle
+from src.modules.gesture.events import Motion
 from src.modules.text_to_speech.events import Audio
 
 
 _HF_REPO = os.environ.get("HURI_EMAGE_REPO", "H-Liu1997/emage_audio")
 _EMAGE_SR = 16000  # EMAGE expects 16 kHz mono audio
-_EMAGE_FPS = 30    # EMAGE emits motion at 30 fps
 
 # Sliding-window defaults. Overridable per-deployment via the module `args`
 # block in the client config, or globally via the env vars below.
@@ -36,15 +36,6 @@ _GPU_MEM_FRACTION = float(os.environ.get("HURI_GESTURE_GPU_MEM_FRACTION", "0.0")
 # TTS uses a different rate (the exact value only affects which resampler
 # filter is pre-built; the model shapes follow the 16 kHz duration regardless).
 _WARMUP_SRC_SR = int(os.environ.get("HURI_GESTURE_WARMUP_SR", "24000"))
-
-
-@dataclass
-class Motion:
-    poses: np.ndarray        # (t, 165)  SMPL-X axis-angle, 55 joints × 3
-    expressions: np.ndarray  # (t, 100)  facial expression coefficients
-    trans: np.ndarray        # (t, 3)    global root translation
-    fps: int = _EMAGE_FPS
-    pts: float = 0.0         # presentation timestamp in seconds, paired with Audio.pts
 
 
 @serve.deployment(name="GestureGeneration")

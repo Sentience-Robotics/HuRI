@@ -7,7 +7,7 @@ from fastapi import WebSocket
 
 from src.core.events import EventData
 from src.core.module import Module
-from src.modules.gesture.gesture import Motion
+from src.modules.gesture.events import Motion
 from src.modules.text_to_speech.events import Audio
 
 logger = logging.getLogger("ray.serve")
