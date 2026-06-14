@@ -14,6 +14,9 @@ class QAG(Module):
 
     input: partial_question,
     output: question
+
+    :use_emotion: default True.
+    Set to False if you do not analyze emotion or do not need it.
     """
 
     input_type = "partial_question"
