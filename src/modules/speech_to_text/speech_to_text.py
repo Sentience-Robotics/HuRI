@@ -98,9 +98,6 @@ class STT(ModuleWithHandle):
 
         self.silence: bool = True
 
-        self.prev_text: str = ""
-        self.stable_text: str = ""
-
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
@@ -126,7 +123,6 @@ class STT(ModuleWithHandle):
                 return None
             processing_chunks = self.buffer[: self.window_size]
 
-        self.pending_silence = False
         processing_audio = np.concatenate(processing_chunks, axis=0)
 
         current_text = await self._handle.transcribe.remote(
