@@ -1,0 +1,68 @@
+from collections import defaultdict
+from typing import Optional
+
+from src.core.module import Module
+from src.modules.rag.events import PartialQuestion
+
+from .events import Emotion
+
+
+class EAG(Module):
+    """EAG Module
+
+    Aggregate all emotions and send when voice end.
+
+    input: emotion,
+    output: partial_question
+    """
+
+    input_type = "emotion"
+    output_type = "partial_question"
+
+    def __init__(self, ema_alpha: Optional[float] = None):
+        super().__init__()
+
+        self.scores = defaultdict(float)
+        self.count = 0
+
+        self.ema_alpha = ema_alpha
+
+    def _finalize(self) -> Emotion:
+        avg_scores = (
+            {label: score / self.count for label, score in self.scores.items()}
+            if self.ema_alpha is None
+            else self.scores
+        )
+
+        best_label = max(avg_scores, key=avg_scores.get)
+
+        result = Emotion(
+            label=best_label,
+            confidence=avg_scores[best_label],
+            scores=avg_scores,
+            end=True,
+        )
+
+        self.scores.clear()
+        self.count = 0
+
+        return result
+
+    async def process(self, emotion: Emotion) -> Optional[PartialQuestion]:
+        if self.ema_alpha is not None:
+            for label, score in emotion.scores.items():
+                self.scores[label] = (
+                    self.ema_alpha * score + (1 - self.ema_alpha) * self.scores[label]
+                )
+        else:
+            for label, score in emotion.scores.items():
+                self.scores[label] += score
+
+        self.count += 1
+
+        if emotion.end:
+            emotion = self._finalize()
+
+            return PartialQuestion(transcript=None, emotion=emotion)
+
+        return None
