@@ -45,7 +45,9 @@ class ClientSender:
 
 
 class AudioSender(ClientSender):
-    output_type = "audio"
+    # Mic frames go out on "audio_in"; the server's "audio" topic is reserved
+    # for TTS output streamed back to us (see MIC.input_type).
+    output_type = "audio_in"
 
     def __init__(
         self, sample_rate: int = 16000, frame_duration: float = 0.030, **kwargs

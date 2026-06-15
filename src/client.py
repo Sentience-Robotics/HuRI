@@ -26,11 +26,21 @@ async def launch_client():
         required=True,
         help="Path to Client config file (YAML)",
     )
+    parser.add_argument(
+        "--save-audio",
+        nargs="?",
+        const="audio_dumps",
+        default=None,
+        metavar="DIR",
+        help="Save streamed TTS audio to .wav files (one per utterance) in DIR "
+        "for quality-checking. Defaults to ./audio_dumps when the flag is given "
+        "without a value.",
+    )
 
     args = parser.parse_args()
     config = load_client_config(args.config)
 
-    await Client(config=config).run()
+    await Client(config=config, save_audio_dir=args.save_audio).run()
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@ class ClientConfig:
             for module_id, mod_raw in raw.get("modules", {}).items()
         }
         return cls(
-            user_id=None,
+            user_id=raw.get("user_id"),
             huri_url=raw["huri_url"],
             topic_list=raw["topic_list"],
             senders=senders,
