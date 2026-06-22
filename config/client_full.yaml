@@ -1,0 +1,44 @@
+huri_url: ws://localhost:8000/session
+
+topic_list: [transcript, question, token, motion]
+
+senders:
+  audio:
+    name: audio
+    args:
+      sample_rate: 16000
+      frame_duration: 0.030
+
+modules:
+  mic:
+    name: mic
+    args:
+      vad_agressiveness: 3
+      silence_duration: 1.5
+      block_duration: ${senders.audio.args.frame_duration}
+    logging: INFO
+  stt:
+    name: stt
+    args:
+      language: en
+      block_duration: ${senders.audio.args.frame_duration}
+    logging: INFO
+  tag:
+    name: tag
+    logging: INFO
+  rag:
+    name: rag
+    args:
+      language: en
+      tone: formal
+      response_format: paragraph
+      max_length: 1024
+    logging: INFO
+  tts:
+    name: tts
+    args:
+      min_clause_chars: 20
+    logging: INFO
+  gesture:
+    name: gesture
+    logging: INFO

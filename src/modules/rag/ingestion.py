@@ -7,7 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, List
 
-from pypdf import PdfReader
+import httpx
+import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -17,10 +18,35 @@ from qdrant_client.models import (
     PointStruct,
     VectorParams,
 )
-from semantic_chunker import SemanticChunker
-from sentence_transformers import SentenceTransformer
 
 USER_ID_FILE = os.path.expanduser("~/.huri_user_id")
+
+
+class RemoteEmbedder:
+    """Embed via an OpenAI-compatible ``/v1/embeddings`` endpoint (e.g. llama.cpp).
+
+    Drop-in for the subset of ``SentenceTransformer`` this tool uses: a single
+    ``.encode(text, normalize_embeddings=...)`` returning a 1-D numpy array, so
+    the existing ``.tolist()`` / ``len(...)`` call sites keep working unchanged.
+    """
+
+    def __init__(self, url: str, model_name: str):
+        self.url = url.rstrip("/")
+        self.model_name = model_name
+        self._client = httpx.Client(timeout=60.0, verify=False)
+
+    def encode(self, text: str, normalize_embeddings: bool = True) -> np.ndarray:
+        resp = self._client.post(
+            f"{self.url}/v1/embeddings",
+            json={"model": self.model_name, "input": str(text)},
+        )
+        resp.raise_for_status()
+        vec = np.asarray(resp.json()["data"][0]["embedding"], dtype=np.float32)
+        if normalize_embeddings:
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+        return vec
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -77,6 +103,8 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
 def extract_text_from_pdf(pdf_path: str) -> str:
     """Extract text from a PDF file."""
     try:
+        from pypdf import PdfReader
+
         reader = PdfReader(pdf_path)
         text = ""
         for page in reader.pages:
@@ -116,7 +144,7 @@ def ensure_collection(client: QdrantClient, collection: str, vector_size: int):
 
 def ingest_chunks(
     client: QdrantClient,
-    model: SentenceTransformer,
+    model: Any,
     collection: str,
     chunks: list[str],
     _user_id: str,
@@ -154,9 +182,12 @@ def ingest_chunks(
     return len(points)
 
 
-def chunk_strat(text: str, args, model: SentenceTransformer) -> list[str] | Any:
+def chunk_strat(text: str, args, model: Any) -> list[str] | Any:
     """Pick the right chunking strategy based on args."""
     if args.chunking == "semantic":
+        # Thomas: I need to import here, bceause it takes too much time earlier, or use a jupyter notebook to do it instead
+        from .semantic_chunker import SemanticChunker
+
         chunker = SemanticChunker(
             model=model,
             strategy=args.semantic_strategy,
@@ -287,6 +318,50 @@ def cmd_write(args, client, model, _user_id):
     print(f"Done. Ingested {count} chunks as '{title}'")
 
 
+def cmd_profile(args, client, model, _user_id):
+    """Store always-on profile facts about the user (name, etc.).
+
+    Unlike regular documents, profile facts are NOT retrieved by vector
+    similarity. The RAG handle pulls them by filter (_user_id + type=profile)
+    on every query and injects them into the system prompt, so the character
+    always knows them.
+    """
+    sample = model.encode("test", normalize_embeddings=True)
+    ensure_collection(client, args.collection, len(sample))
+
+    facts: List[str] = []
+    if args.name:
+        facts.append(f"The user's name is {args.name}.")
+    for fact in args.fact or []:
+        facts.append(fact)
+
+    if not facts:
+        print("Nothing to store. Use --name and/or --fact 'some fact'.")
+        return
+
+    # Replace the existing profile so facts don't pile up across runs.
+    client.delete(
+        collection_name=args.collection,
+        points_selector=Filter(
+            must=[
+                FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
+                FieldCondition(key="type", match=MatchValue(value="profile")),
+            ]
+        ),
+    )
+
+    count = ingest_chunks(
+        client,
+        model,
+        args.collection,
+        facts,
+        _user_id,
+        source="profile",
+        doc_type="profile",
+    )
+    print(f"Stored {count} profile fact(s) for user {_user_id}")
+
+
 def cmd_list(args, client, model, _user_id):
     """List what's in the database for this user."""
 
@@ -355,7 +430,23 @@ def main():
     parser.add_argument("--user-id", type=str, default=None)
     parser.add_argument("--collection", type=str, default="documents")
     parser.add_argument("--qdrant-url", type=str, default="http://localhost:6333")
+    parser.add_argument(
+        "--no-verify-ssl",
+        action="store_true",
+        default=False,
+        help="Disable SSL certificate verification (needed for self-signed LAN certs).",
+    )
     parser.add_argument("--embedding-model", type=str, default="BAAI/bge-large-en-v1.5")
+    parser.add_argument(
+        "--embedding-url",
+        type=str,
+        default="",
+        help=(
+            "OpenAI-compatible embedding endpoint (e.g. llama.cpp at "
+            "http://localhost:8080). When set, embeddings are computed remotely "
+            "instead of with a local SentenceTransformer. Requires --chunking fixed."
+        ),
+    )
     parser.add_argument(
         "--chunk-size",
         type=int,
@@ -394,6 +485,16 @@ def main():
     p_write = subparsers.add_parser("write", help="Write text interactively")
     p_write.add_argument("--title", type=str, default=None, help="Title/source name")
 
+    p_profile = subparsers.add_parser(
+        "profile", help="Store always-on profile facts (name, etc.)"
+    )
+    p_profile.add_argument("--name", type=str, default=None, help="User's name")
+    p_profile.add_argument(
+        "--fact",
+        action="append",
+        help="A fact about the user, e.g. --fact 'Likes cheese' (repeatable)",
+    )
+
     subparsers.add_parser("list", help="List ingested documents")
 
     p_delete = subparsers.add_parser("delete", help="Delete documents by source")
@@ -403,16 +504,42 @@ def main():
 
     args = parser.parse_args()
 
-    _user_id = get_user_id(args._user_id)
+    if args.embedding_url and args.chunking == "semantic":
+        parser.error(
+            "--chunking semantic needs a local SentenceTransformer model and "
+            "cannot run over --embedding-url. Use --chunking fixed."
+        )
+
+    _user_id = get_user_id(args.user_id)
     print(f"User: {_user_id}")
 
-    client = QdrantClient(url=args.qdrant_url)
-    model = SentenceTransformer(args.embedding_model)
+    verify_ssl = not args.no_verify_ssl
+    try:
+        from .qdrant_utils import make_qdrant_client
+    except ImportError:
+        from qdrant_utils import make_qdrant_client
+    client = make_qdrant_client(args.qdrant_url, verify_ssl)
+
+    # Lazy-load the model only if the command needs embeddings.
+    # Commands that don't need it: list, delete, profile (doesn't use embeddings).
+    needs_embeddings = args.command in ("pdf", "text", "write", "profile")
+
+    if needs_embeddings:
+        if args.embedding_url:
+            print(f"Embedding remotely via {args.embedding_url} (model={args.embedding_model})")
+            model = RemoteEmbedder(args.embedding_url, args.embedding_model)
+        else:
+            from sentence_transformers import SentenceTransformer
+
+            model = SentenceTransformer(args.embedding_model)
+    else:
+        model = None
 
     commands = {
         "pdf": cmd_pdf,
         "text": cmd_text,
         "write": cmd_write,
+        "profile": cmd_profile,
         "list": cmd_list,
         "delete": cmd_delete,
     }

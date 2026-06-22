@@ -1,8 +1,10 @@
 from typing import Any, Dict, List, Mapping, Type
 
+from ray.serve import handle
+
 from src.core.dataclasses.config import ModuleConfig
 from src.core.events import EventData
-from src.core.module import Module, ModuleWithHandle, ModuleWithId, handle
+from src.core.module import Module, ModuleWithHandle, ModuleWithId
 
 
 class EventDataFactory:
@@ -94,7 +96,6 @@ class ModuleFactory:
 
 def bind_deployment_handles(
     modules: Dict[str, Type[Module]],
-    **service_handles,
 ) -> Dict[str, handle.DeploymentHandle]:
     handles: Dict[str, handle.DeploymentHandle] = {}
     for name, module_cls in modules.items():
@@ -106,12 +107,6 @@ def bind_deployment_handles(
 
         handle_cls = module_cls._handle_cls
 
-        if name == "rag" and service_handles:
-            handles[name] = handle_cls.bind(
-                ollama_handle=service_handles.get("ollama"),
-                qdrant_handle=service_handles.get("qdrant"),
-            )
-        else:
-            handles[name] = handle_cls.bind()
+        handles[name] = handle_cls.bind()
 
     return handles
