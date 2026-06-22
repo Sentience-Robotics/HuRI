@@ -1,5 +1,6 @@
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import numpy as np
@@ -11,9 +12,10 @@ from src.core.module import ModuleWithHandle
 from .events import Transcript, Voice
 
 _MODEL_PATH = os.environ.get("HURI_STT_MODEL_PATH", "base")
+_NUM_WORKERS = int(os.environ.get("HURI_STT_NUM_WORKERS", "2"))
 
 
-@serve.deployment(name="STT")
+@serve.deployment(name="STT", max_ongoing_requests=8)
 class STTDeployment:
     """faster-whisper model wrapper.
 
@@ -36,16 +38,39 @@ class STTDeployment:
         model: str = _MODEL_PATH,
         device: str = "auto",
         compute_type: str = "auto",
+        num_workers: int = _NUM_WORKERS,
     ):
         from faster_whisper import WhisperModel
 
+        # num_workers lets CTranslate2 service several transcriptions at once on
+        # this single replica — each "worker" is an independent inference slot
+        # over the shared (read-only) weights. Combined with the thread pool
+        # below, N sessions are transcribed concurrently while staying fully
+        # independent: no per-call client state is ever held here (the sliding
+        # window lives in the per-session STT module).
         self.model_faster = WhisperModel(
             model,
             device=device,
             compute_type=compute_type,
+            num_workers=num_workers,
+        )
+        # Run the *blocking* faster-whisper call off the actor's asyncio loop.
+        # transcribe() used to be an async method that called the synchronous
+        # model inline, blocking the replica's event loop for the whole inference
+        # — serialising every session on the replica and stalling Serve health
+        # checks. Offloading to a thread pool (sized to num_workers) keeps the
+        # loop free to accept other sessions' requests while inference runs.
+        self._executor = ThreadPoolExecutor(
+            max_workers=num_workers, thread_name_prefix="stt-transcribe"
         )
 
     async def transcribe(self, audio: np.ndarray, language: str = "en") -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._executor, self._transcribe_sync, audio, language
+        )
+
+    def _transcribe_sync(self, audio: np.ndarray, language: str) -> str:
         segments, _ = self.model_faster.transcribe(
             audio,
             language=language,
