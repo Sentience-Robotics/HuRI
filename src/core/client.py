@@ -3,10 +3,8 @@ import importlib
 import json
 import os
 import struct
-import wave
 from collections import defaultdict
 from dataclasses import asdict
-from datetime import datetime
 from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
 import numpy as np
@@ -44,7 +42,7 @@ class ClientSender(Generic[T]):
 
     async def _send_bytes(self, ws: websockets.ClientConnection, data: bytes):
         topic_bytes = self.topic.encode()
-        packet = struct.pack("!H", len(topic_bytes)) + topic_bytes + data
+        packet = struct.pack(">H", len(topic_bytes)) + topic_bytes + data
 
         await ws.send(packet)
 
@@ -87,7 +85,6 @@ class Client:
         self,
         config: ClientConfig,
         user_id_file: str = os.path.expanduser("~/.huri_user_id"),
-        save_audio_dir: Optional[str] = None,
     ):
         self.config = config
 
@@ -116,16 +113,6 @@ class Client:
 
         self.user_id_file = user_id_file
 
-        # When set, incoming audio chunks are buffered per utterance and written
-        # to a .wav under this directory each time an end-of-utterance marker
-        # arrives — handy for ear-checking what the TTS actually streamed.
-        self.save_audio_dir = save_audio_dir
-        self._audio_buf: List[np.ndarray] = []
-        self._audio_sr: Optional[int] = None
-        self._audio_idx = 0
-        if save_audio_dir:
-            os.makedirs(save_audio_dir, exist_ok=True)
-
     def _load_user_id(self) -> Optional[str]:
         if os.path.exists(self.user_id_file):
             with open(self.user_id_file) as f:
@@ -136,65 +123,37 @@ class Client:
         with open(self.user_id_file, "w") as f:
             f.write(_user_id)
 
-    def _collect_audio(self, samples: np.ndarray, sample_rate: int, end: bool) -> None:
-        if samples.size:
-            self._audio_buf.append(samples)
-            self._audio_sr = sample_rate
-        if end:
-            self._flush_audio()
-
-    def _flush_audio(self) -> None:
-        if not self._audio_buf or self._audio_sr is None:
-            self._audio_buf = []
-            return
-        audio = np.concatenate(self._audio_buf)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = os.path.join(
-            self.save_audio_dir, f"utt-{self._audio_idx:03d}-{stamp}.wav"
-        )
-        self._write_wav(path, audio, self._audio_sr)
-        print(
-            f"** saved audio: {path} ({audio.size} samples, "
-            f"~{audio.size / self._audio_sr:.2f}s @ {self._audio_sr}Hz)"
-        )
-        self._audio_idx += 1
-        self._audio_buf = []
-
-    @staticmethod
-    def _write_wav(path: str, audio: np.ndarray, sample_rate: int) -> None:
-        # float32 [-1, 1] -> 16-bit PCM, clipped to avoid wraparound on overshoot.
-        pcm = np.clip(audio, -1.0, 1.0)
-        pcm = (pcm * 32767.0).astype("<i2")
-        with wave.open(path, "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(sample_rate)
-            wav.writeframes(pcm.tobytes())
-
     async def _receive_loop(self, ws: websockets.ClientConnection):
         try:
             while True:
                 msg = await ws.recv()
 
                 if isinstance(msg, bytes):
-                    topic_len = struct.unpack("!H", msg[:2])[0]
+                    topic_len = struct.unpack(">H", msg[:2])[0]
 
                     topic = msg[2 : 2 + topic_len].decode()
                     data = msg[2 + topic_len :]
 
                     if topic == "audio" and len(data) >= 13:
-                        sample_rate, end_flag, pts = struct.unpack(">IBd", data[:13])
+                        sample_rate, end, pts = struct.unpack(">IBd", data[:13])
                         # Samples are native-endian float32 (Sender uses ndarray.tobytes()).
                         samples = np.frombuffer(data[13:], dtype=np.float32)
-                        print(
-                            f"<< audio: pts={pts:.3f}s samples={samples.size} @ {sample_rate}Hz "
-                            f"end={bool(end_flag)}"
-                        )
-                        if self.save_audio_dir:
-                            self._collect_audio(samples, sample_rate, bool(end_flag))
+                        data = {
+                            "sample_rate": sample_rate,
+                            "end": end,
+                            "pts": pts,
+                            "data": samples,
+                        }
                     elif topic == "motion" and len(data) >= 16:
                         pts, fps, n_frames = struct.unpack(">dII", data[:16])
                         print(f"<< motion: pts={pts:.3f}s frames={n_frames} @ {fps}fps")
+                        data = {
+                            "poses": np.ndarray(),
+                            "expressions": np.ndarray(),
+                            "trans": np.ndarray(),
+                            "fps": fps,
+                            "pts": pts,
+                        }
                     else:
                         print(f"<< {topic}: bytes ({len(data)}B)")
                 else:
@@ -209,9 +168,6 @@ class Client:
 
         except (asyncio.CancelledError, websockets.ConnectionClosedOK):
             pass
-        finally:
-            if self.save_audio_dir:
-                self._flush_audio()  # save anything left if the stream ended mid-utterance
 
     async def run(self):
         async with websockets.connect(self.config.huri_url) as ws:
