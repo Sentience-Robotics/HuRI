@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 
 from src.core.client import Client
 from src.core.dataclasses.config import ClientConfig
+from src.core.user_config import get_or_create_and_save_user_id
 
 
 def load_client_config(path: str) -> ClientConfig:
@@ -15,6 +16,10 @@ def load_client_config(path: str) -> ClientConfig:
 
     if not isinstance(raw_resolved, Dict):
         raise RuntimeError("error yaml does not output a dict")
+
+    user_id_file_path = raw_resolved.get("user_id_file_path")
+    user_id = get_or_create_and_save_user_id(user_id_file_path)
+    raw_resolved["user_id"] = user_id
 
     return ClientConfig.from_dict(raw_resolved)
 

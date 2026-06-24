@@ -47,7 +47,7 @@ class ClientSenderConfig:
 
 @dataclass
 class ClientConfig:
-    user_id: Optional[str]
+    user_id: str
     huri_url: str
     interface_path: str
     hooks: Dict[str, ClientHookConfig]
@@ -69,7 +69,7 @@ class ClientConfig:
             for module_id, mod_raw in raw.get("modules", {}).items()
         }
         return cls(
-            user_id=raw.get("user_id"),
+            user_id=raw["user_id"],
             huri_url=raw["huri_url"],
             interface_path=raw["interface_path"],
             hooks=hooks,

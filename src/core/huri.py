@@ -78,8 +78,6 @@ class HuRI:
         client_config_raw: Dict = await ws.receive_json()
         client_config = ClientConfig.from_dict(client_config_raw)
 
-        user_id = client_config_raw.get("user_id") or str(uuid.uuid4())
-
         topic_list = [
             topic
             for hook_config in client_config.hooks.values()
@@ -87,15 +85,19 @@ class HuRI:
         ]
         senders: List[Module] = [Sender(ws, topic) for topic in topic_list]
         modules: List[Module] = (
-            self.module_factory.create_from_config(user_id, client_config.modules)
+            self.module_factory.create_from_config(
+                client_config.user_id, client_config.modules
+            )
             + senders
         )
 
-        await ws.send_json({"type": "session_init", "user_id": user_id})
+        await ws.send_json({"type": "session_init", "user_id": client_config.user_id})
 
         session_id = str(uuid.uuid4())
         self.clients[session_id] = Session(modules)
-        print(f"Client registered with _user_id={user_id}, config: {client_config}")
+        print(
+            f"Client registered with _user_id={client_config.user_id}, config: {client_config}"
+        )
 
         async def receive_loop(session: Session, ws: WebSocket):
             try:
@@ -122,11 +124,11 @@ class HuRI:
                     await session.publish(topic, data)
 
             except RuntimeError as e:
-                print(f"[ERROR] Client {user_id}:", e)
+                print(f"[ERROR] Client {client_config.user_id}:", e)
             except WebSocketDisconnect:
                 pass
             finally:
-                print(f"Client {user_id} disconnected")
+                print(f"Client {client_config.user_id} disconnected")
 
         await receive_loop(self.clients[session_id], ws)
         del self.clients[session_id]

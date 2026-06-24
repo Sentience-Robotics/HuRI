@@ -84,7 +84,6 @@ class Client:
     def __init__(
         self,
         config: ClientConfig,
-        user_id_file: str = os.path.expanduser("~/.huri_user_id"),
     ):
         self.config = config
 
@@ -110,18 +109,6 @@ class Client:
                         singletton=interface.singletton, **hook.args
                     )
                 )
-
-        self.user_id_file = user_id_file
-
-    def _load_user_id(self) -> Optional[str]:
-        if os.path.exists(self.user_id_file):
-            with open(self.user_id_file) as f:
-                return f.read().strip()
-        return None
-
-    def _save_user_id(self, _user_id: str):
-        with open(self.user_id_file, "w") as f:
-            f.write(_user_id)
 
     async def _receive_loop(self, ws: websockets.ClientConnection):
         try:
@@ -173,14 +160,11 @@ class Client:
         async with websockets.connect(self.config.huri_url) as ws:
             print("Connected to server")
 
-            self.config.user_id = self._load_user_id()
-
             await ws.send(json.dumps(asdict(self.config)))
 
             init_msg = json.loads(await ws.recv())
             if init_msg.get("type") == "session_init":
                 user_id = init_msg["user_id"]
-                self._save_user_id(user_id)
                 print(f"Session started with _user_id: {user_id}")
 
             receive_task = asyncio.create_task(self._receive_loop(ws=ws))
