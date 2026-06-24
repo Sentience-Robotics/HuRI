@@ -37,9 +37,10 @@ def _normalize_transcript(raw: str) -> str:
         else f"{_DEFAULT_INSTRUCTION}<|endofprompt|>{raw}"
     )
 
-_END_TEXT = object()   # sentinel pushed into the text queue to close synth
+
+_END_TEXT = object()  # sentinel pushed into the text queue to close synth
 _END_AUDIO = object()  # sentinel pushed into the audio queue when synth completes
-_DONE = object()       # sentinel for exhausted sync generator
+_DONE = object()  # sentinel for exhausted sync generator
 
 
 @serve.deployment(name="TTS", max_ongoing_requests=200)
@@ -66,7 +67,7 @@ class TTSDeployment:
                 sys.path.insert(0, matcha_path)
 
         from cosyvoice.cli.cosyvoice import CosyVoice3
-    
+
         # Resolve the reference transcript here (deploy time on the GPU worker)
         # rather than at module import: importing this module must not require
         # HURI_VOICE_TRANSCRIPT, since modules.py imports it inside a broad
@@ -171,7 +172,7 @@ class TTS(ModuleWithHandle):
         # and silently drop trailing words).
         self._push_lock = asyncio.Lock()
 
-    async def process(self, token: Token) -> AsyncGenerator[Audio, None]:  # type: ignore[override]
+    async def process(self, token: Token) -> AsyncGenerator[Audio, None]:
         # Acquire BEFORE any await so lock-acquisition order matches token order.
         # Setup + push happen under the lock; only the first token of an
         # utterance goes on to drain/yield audio (outside the lock, so pushes of
@@ -181,7 +182,9 @@ class TTS(ModuleWithHandle):
             if is_first:
                 self._session_id = str(uuid.uuid4())
                 self._audio_q = asyncio.Queue()
-                print(f"[TTS-client] [{self._session_id}] opening new utterance session")
+                print(
+                    f"[TTS-client] [{self._session_id}] opening new utterance session"
+                )
                 await self._handle.start_session.remote(self._session_id)
                 self._stream_task = asyncio.create_task(
                     self._drain_audio(self._session_id, self._audio_q)
@@ -210,7 +213,9 @@ class TTS(ModuleWithHandle):
             print(f"[TTS-client] [{sid}] utterance complete ({count} chunks)")
 
             sample_rate = await self._handle.get_sample_rate.remote()
-            yield Audio(data=np.array([], dtype=np.float32), sample_rate=sample_rate, end=True)
+            yield Audio(
+                data=np.array([], dtype=np.float32), sample_rate=sample_rate, end=True
+            )
         finally:
             async with self._push_lock:
                 self._session_id = None

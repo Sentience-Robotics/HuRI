@@ -95,9 +95,8 @@ class HuRI:
 
         session_id = str(uuid.uuid4())
         self.clients[session_id] = Session(modules)
-        print(
-            f"Client registered with _user_id={client_config.user_id}, config: {client_config}"
-        )
+        print(f"Client registered with _user_id={client_config.user_id}, \
+config: {client_config}")
 
         async def receive_loop(session: Session, ws: WebSocket):
             try:

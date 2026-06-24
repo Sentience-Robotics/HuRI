@@ -1,0 +1,51 @@
+huri_url: ws://localhost:8000/session
+
+interface_path: src.interfaces.cli_interface:cli_interface
+
+senders:
+  # audio:
+  #   name: audio
+  #   topic: audio_in
+  #   args:
+  #     sample_rate: 16000
+  #     frame_duration: 0.030
+  text:
+    name: text
+    topic: question
+    args:
+      sample_rate: 16000
+      frame_duration: 0.030
+
+hooks:
+  text:
+    name: text
+    topics: [question, answer]
+  audio:
+    name: audio
+    topics: [audio]
+    args:
+      incoming_sample_rate: ${senders.text.args.sample_rate}
+      sample_rate: 44100
+      save_audio_dir: "uuid"
+
+modules:
+  # mic:
+  #   name: mic
+  #   args:
+  #     vad_agressiveness: 3
+  #     silence_duration: 1.5
+  #     block_duration: ${senders.audio.args.frame_duration}
+  # stt:
+  #   name: stt
+  #   args:
+  #     language: en
+  #     block_duration: ${senders.audio.args.frame_duration}
+  # tag:
+  #   name: tag
+  rag:
+    name: rag
+    args:
+      language: en
+      tone: formal
+  tts:
+    name: tts

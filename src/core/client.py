@@ -1,11 +1,10 @@
 import asyncio
 import importlib
 import json
-import os
 import struct
 from collections import defaultdict
 from dataclasses import asdict
-from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
+from typing import Any, Dict, Generic, List, Type, TypeVar
 
 import numpy as np
 import websockets
@@ -123,7 +122,8 @@ class Client:
 
                     if topic == "audio" and len(data) >= 13:
                         sample_rate, end, pts = struct.unpack(">IBd", data[:13])
-                        # Samples are native-endian float32 (Sender uses ndarray.tobytes()).
+                        # Samples are native-endian float32
+                        # (Sender uses ndarray.tobytes()).
                         samples = np.frombuffer(data[13:], dtype=np.float32)
                         data = {
                             "sample_rate": sample_rate,
@@ -135,9 +135,9 @@ class Client:
                         pts, fps, n_frames = struct.unpack(">dII", data[:16])
                         print(f"<< motion: pts={pts:.3f}s frames={n_frames} @ {fps}fps")
                         data = {
-                            "poses": np.ndarray(),
-                            "expressions": np.ndarray(),
-                            "trans": np.ndarray(),
+                            "poses": np.ndarray(0),
+                            "expressions": np.ndarray(0),
+                            "trans": np.ndarray(0),
                             "fps": fps,
                             "pts": pts,
                         }

@@ -1,4 +1,4 @@
-from typing import Any, Optional, Type
+from typing import Any, AsyncGenerator, Coroutine, Optional, Type
 
 from ray.serve import handle
 
@@ -24,7 +24,7 @@ class Module:
     input_type: str
     output_type: Optional[str]
 
-    async def process(self, _) -> Optional[Any]:
+    def process(self, _) -> Coroutine[Any, Any, Any] | AsyncGenerator[Any, None]:
         raise NotImplementedError
 
 

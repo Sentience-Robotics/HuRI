@@ -1,13 +1,14 @@
 import asyncio
-from typing import Dict, Type, Optional, List
 import os
+import wave
+from datetime import datetime
+from typing import Dict, List, Optional, Type
+
 import numpy as np
 import sounddevice as sd
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 from scipy.signal import resample
-import wave
-from datetime import datetime
 
 from src.core.client import ClientHook, ClientSender
 from src.core.interface import Interface
@@ -148,7 +149,8 @@ class AudioHook(ClientHook[Audio]):
 
     async def hook(self, data: Audio):
         print(
-            f"<< audio: pts={data.pts:.3f}s samples={data.data.size} @ {data.sample_rate}Hz "
+            f"<< audio: pts={data.pts:.3f}s "
+            f"samples={data.data.size} @ {data.sample_rate}Hz "
             f"end={bool(data.end)}"
         )
         # audio = np.frombuffer(data, dtype=np.int16)

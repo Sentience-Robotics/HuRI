@@ -1,9 +1,9 @@
 from typing import Dict, Type
 
 from src.core.events import EventData
-from src.modules.speech_to_text.events import Sentence, Transcript, Voice
-from src.modules.text_to_speech.events import Audio, Token
 from src.modules.gesture.events import Motion
+from src.modules.speech_to_text.events import Sentence, Transcript, Voice
+from src.modules.text_to_speech.events import Token
 
 
 def get_events() -> Dict[str, Type[EventData | bytes]]:
@@ -14,7 +14,7 @@ def get_events() -> Dict[str, Type[EventData | bytes]]:
         "transcript": Transcript,
         "question": Sentence,
         "token": Token,
-        "motion": Motion
+        "motion": Motion,
     }
 
     return events
