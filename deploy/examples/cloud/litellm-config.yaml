@@ -1,0 +1,25 @@
+# LiteLLM proxy config (rendered by templatefile() from litellm.tf).
+#
+# Exposes one OpenAI-compatible model alias, "huri-fast", that forwards to
+# Google Gemini. The RAGHandle calls {llm_url}/v1/chat/completions with
+# model="huri-fast" (llm_provider: vllm), and LiteLLM translates to Gemini.
+#
+# The Gemini API key is injected via the GEMINI_API_KEY env var (from the
+# litellm-secrets Kubernetes Secret) — never stored in this file or in git.
+
+model_list:
+  - model_name: huri-fast
+    litellm_params:
+      model: gemini/${model}
+      api_key: os.environ/GEMINI_API_KEY
+
+litellm_settings:
+  # Drop params a given model doesn't support instead of erroring, so the
+  # RAGHandle's OpenAI-style request body is always accepted.
+  drop_params: true
+
+general_settings:
+  # Internal ClusterIP service — no virtual-key auth. Access is restricted at
+  # the network layer (ClusterIP, same namespace), so requests need no bearer
+  # token and the Gemini key stays solely in the Secret.
+  master_key: null

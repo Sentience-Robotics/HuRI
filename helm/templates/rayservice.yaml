@@ -11,6 +11,12 @@ spec:
 {{ .Values.ray.serveConfig | indent 4 }}
   rayClusterConfig:
     rayVersion: {{ .Values.ray.version | quote }}
+    {{- if .Values.ray.enableInTreeAutoscaling }}
+    # Layer ② — the Ray autoscaler turns Serve replica demand into worker-pod
+    # demand, scaling workerGroupSpecs between their min/maxReplicas. Off unless
+    # explicitly enabled in values, so single-GPU deployments stay pinned.
+    enableInTreeAutoscaling: true
+    {{- end }}
 
     headGroupSpec:
       serviceType: {{ .Values.head.serviceType }}

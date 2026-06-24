@@ -1,11 +1,27 @@
 # GCP Specific Overrides for HuRI Ray Cluster
 
 image:
-  # repository: <your-gcr-or-ar-repo>/huri
-  # tag: base-2.55.1
+  # Image for the Ray HEAD and any worker group without its own `image:` (CPU
+  # actors land here). Built from deploy/Dockerfile.base and pushed to the
+  # Artifact Registry BEFORE `terraform apply` — see ../../../gcp_steps.md §1c.
+  # The GPU worker group below overrides this with the nvidia image.
+  repository: europe-west4-docker.pkg.dev/hurigcp/huri/huri
+  tag: base-2.55.1@sha256:24fb47df79c2c60b5067c6711b90c5fc43d73da3a396f06779369259945b4b5a
   pullPolicy: IfNotPresent
 
+# The KubeRay operator is installed as its OWN Helm release
+# (helm_release.kuberay_operator in main.tf), so this chart must not also bundle
+# it as a sub-chart — otherwise the operator's cluster-scoped RBAC (e.g.
+# raycronjob-editor-role) collides with the existing release's Helm ownership.
+kuberay:
+  install: false
+
 ray:
+  # Layer ② — let the Ray (KubeRay) autoscaler add GPU worker pods when Serve
+  # asks for replicas that don't fit on the current pods. Pairs with the
+  # workerGroups maxReplicas below and the GKE node-pool autoscaling in gke.tf
+  # (layer ③). Leave unset/false in the local single-GPU values to stay pinned.
+  enableInTreeAutoscaling: true
   serveConfig: |
     proxy_location: EveryNode
     http_options:
@@ -22,57 +38,135 @@ ray:
             HURI_GESTURE_MIN_CHUNK_SEC: "0.5"
             HURI_VOICE_TRANSCRIPT: "You are a helpful assistant.<|endofprompt|>Instinct creates its own oppressors and bids us rise up against them."
             HURI_STT_MODEL_PATH: /models/whisper/Systran/faster-whisper-base
+            # Concurrent transcription slots on the single STT replica. Each
+            # client's audio cache is per-session (in the STT module), so this
+            # only affects throughput, never isolation. Raise for more
+            # simultaneous speakers; it shares the one GPU slice below.
+            HURI_STT_NUM_WORKERS: "2"
+        # ──────────────────────────────────────────────────────────────────
+        # Autoscaling (layer ①: Ray Serve replicas).
+        # The autoscaling_config blocks below let Serve add/remove model
+        # replicas based on in-flight requests:
+        #   desired = ceil(total_ongoing_requests / target_ongoing_requests)
+        # clamped to [min_replicas, max_replicas]. min_replicas:1 keeps a warm
+        # replica so the baseline never cold-starts.
+        #
+        # End-to-end GPU autoscaling is now wired across all three layers:
+        #   ① these autoscaling_config blocks            (Serve replicas)
+        #   ② ray.enableInTreeAutoscaling + workerGroups maxReplicas (KubeRay
+        #      scales GPU worker pods)
+        #   ③ gke.tf gpu_nodes autoscaling { }           (GKE provisions GPU VMs)
+        # Flow: load rises → Serve wants replicas → no free GPU → KubeRay adds a
+        # worker pod → pod Pending → GKE adds a GPU node → replica runs.
+        # The remaining ceiling is GPU quota + budget (and per-zone node counts
+        # for the regional pool). Cold-start is minutes (VM + driver + model
+        # load), so min_replicas:1 stays warm; for bursts on the existing GPU,
+        # HURI_STT_NUM_WORKERS adds in-replica concurrency without waiting for a
+        # node.
+        #
+        # GPU PACKING NOTE — num_gpus below is a *logical* Ray fraction, not a
+        # memory reservation; it only controls how many actors Ray packs per
+        # card. Sized for the A100 40GB (a2-highgpu-1g): each model's real
+        # footprint is a few GB (Whisper base <1GB, CosyVoice3 ~4GB, EMAGE ~3GB),
+        # far under 40GB, so the fractions are deliberately small to pack many
+        # replicas onto ONE card before autoscaling buys a second:
+        #   baseline (1 each): STT 0.2 + TTS 0.1 + Gesture 0.1 = 0.4
+        #   one full A100 e.g.: STT*3 + TTS*2 + Gesture*2 = 1.0
+        # Shrink further for more density — the binding limit is logical packing,
+        # not memory. (On a 16GB T4 you'd raise these back toward ~0.5/0.2/0.2.)
+        # ──────────────────────────────────────────────────────────────────
         deployments:
+          # Stateful WebSocket ingress + per-session routing — single coordinator,
+          # not autoscaled.
           - name: HuRI
+            num_replicas: 1
             ray_actor_options:
               num_cpus: 1
               num_gpus: 0
           - name: STT
-            num_replicas: 1
+            # Client isolation is per-session (audio cache lives in the STT
+            # module); this actor is stateless per call. HURI_STT_NUM_WORKERS
+            # gives in-replica concurrency; replicas add cross-actor parallelism
+            # and pack onto the A100 at 0.2 each (see packing note above).
+            max_ongoing_requests: 8
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 4          # 0.2 GPU each → up to ~4 share one A100
+              target_ongoing_requests: 4
             ray_actor_options:
               num_cpus: 1
-              num_gpus: 0.5
-              # Changed from AMD to NVIDIA for GCP
-              resources: {"GPU_TYPE_NVIDIA": 0.5}
+              num_gpus: 0.2
+              resources: {"GPU_TYPE_NVIDIA": 0.2}
           - name: RAGHandle
-            num_replicas: 1
+            # CPU/network-bound (num_gpus: 0) — these replicas schedule on the
+            # existing nodes without needing GPU, so this one genuinely scales
+            # within the current cluster. Work is async LLM/embedding I/O.
+            max_ongoing_requests: 16
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 4
+              target_ongoing_requests: 8
             ray_actor_options:
               num_cpus: 1
               num_gpus: 0
               # Removed AMD specific resource
             user_config:
-              qdrant_url: "https://qdrant.pommier.lan"
-              llm_url: "https://llm.huri.lan"
-              embedding_url: "https://embedding.huri.lan"
+              # In-cluster services provisioned by Terraform (qdrant.tf, litellm.tf).
+              qdrant_url: "http://qdrant.huri.svc.cluster.local:6333"
+              llm_url: "http://litellm.huri.svc.cluster.local:4000"
+              # In-cluster embedding server (embedding.tf): llama.cpp serving the
+              # same bge-large-en-v1.5 GGUF used at ingestion, so query vectors
+              # match the stored ones. /v1/embeddings is appended by the handler.
+              embedding_url: "http://embedding.huri.svc.cluster.local:8080"
               embedding_model: "bge-large-en-v1.5-gguf-Q4_K_M"
+              # LiteLLM exposes an OpenAI-compatible /v1/chat/completions; "vllm"
+              # sends no auth header (the proxy is cluster-internal). "huri-fast"
+              # is the LiteLLM alias that forwards to Gemini.
               llm_provider: "vllm"
-              llm_model: "Qwen3.5-4B-GGUF"
-              verify_ssl: false
+              llm_model: "huri-fast"
+              verify_ssl: true
           - name: TTS
+            # Streaming synth runs per-utterance in a thread (run_in_executor),
+            # so one replica already serves several sessions; replicas pack onto
+            # the A100 at 0.1 each for more concurrent utterances.
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 4
+              target_ongoing_requests: 8
             ray_actor_options:
               num_cpus: 1
-              num_gpus: 0.2 # Adjusted to fit multiple actors on one T4
-              resources: {"GPU_TYPE_NVIDIA": 0.2}
+              num_gpus: 0.1 # logical GPU fraction for Ray packing (see note above)
+              resources: {"GPU_TYPE_NVIDIA": 0.1}
           - name: GestureGeneration
+            # Sync infer() is auto-threaded by Serve (concurrent within a
+            # replica). Replicas pack onto the A100 at 0.1 each.
+            autoscaling_config:
+              min_replicas: 1
+              max_replicas: 4
+              target_ongoing_requests: 4
             ray_actor_options:
               num_cpus: 1
-              num_gpus: 0.2
-              resources: {"GPU_TYPE_NVIDIA": 0.2}
+              num_gpus: 0.1
+              resources: {"GPU_TYPE_NVIDIA": 0.1}
 
 head:
   serviceType: ClusterIP
   nodeSelector:
-    node-role.kubernetes.io/control-plane: "true"
+    huri.io/system: "true"
   tolerations:
-    - key: node-role.kubernetes.io/control-plane
+    - key: huri.io/system
       operator: Exists
       effect: NoSchedule
 
 workerGroups:
   - groupName: gpu-nvidia
-    image: docker.pommier.dev/huri:nvidia-2.55.1
+    # Private Artifact Registry (the "GCR"): {location}-docker.pkg.dev/{project}/{repo}/huri:{tag}
+    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:bb64dd8fe06740acfa20356d7c6784d943c0a35227257c6ef57f7173eae6aef5
     replicas: 1
     minReplicas: 1
+    # One A100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),
+    # so maxReplicas = 1. The autoscaler packs multiple Serve model actors onto
+    # this single card via fractional GPU requests, not multiple pods.
     maxReplicas: 1
     mountVoiceAssets: true
     # cudaCacheHostPath is typically not used in GKE unless you have a specific reason
@@ -84,14 +178,21 @@ workerGroups:
     customResources: '{\"GPU_TYPE_NVIDIA\":1}'
     rayStartParams:
       num-gpus: "1"
+      # Pin Ray's logical CPU count to match the pod limit below. Each model
+      # actor requests num_cpus:1, so this — not the GPU fraction — is what caps
+      # how many replicas pack onto the card. a2-highgpu-1g has 12 vCPU, so we
+      # expose 11 and leave ~1 for the kubelet/system daemons + the raylet.
+      num-cpus: "11"
     resources:
+      # Sized for a2-highgpu-1g (12 vCPU / 85 GB / 1*A100 40GB). Leaves ~1 vCPU
+      # and headroom for the kubelet/system daemons and the raylet itself.
       limits:
-        cpu: "4"
-        memory: "14Gi"
+        cpu: "11"
+        memory: "78Gi"
         nvidia.com/gpu: "1"
       requests:
-        cpu: "2"
-        memory: "8Gi"
+        cpu: "8"
+        memory: "48Gi"
         nvidia.com/gpu: "1"
 
   # Disable AMD group for GCP
@@ -103,17 +204,17 @@ workerGroups:
 models:
   cosytts:
     nodeSelector:
-      node-role.kubernetes.io/control-plane: "true"
+      huri.io/system: "true"
     pvc:
       storageClassName: "standard-rwo"
   whisper:
     nodeSelector:
-      node-role.kubernetes.io/control-plane: "true"
+      huri.io/system: "true"
     pvc:
       storageClassName: "standard-rwo"
   emage:
     nodeSelector:
-      node-role.kubernetes.io/control-plane: "true"
+      huri.io/system: "true"
     pvc:
       storageClassName: "standard-rwo"
 
@@ -121,10 +222,24 @@ voiceAssets:
   pvc:
     storageClassName: "standard-rwo"
 
+# The raw Ray Serve websocket (huri-serve-svc:8000) is INTENTIONALLY not exposed
+# by an Ingress. It has no authentication of its own — the website backend is the
+# auth layer (OIDC relying party that pins the Authelia `sub` as the RAG
+# partition key). Publishing this socket would let anyone connect to /session
+# directly, bypass Authelia, and read/poison any user's RAG documents by setting
+# an arbitrary user_id. The website reaches HuRI privately over the in-cluster
+# ClusterIP (ws://huri-serve-svc.huri.svc.cluster.local:8000/session); only the
+# website (app.huri.pommier.dev) and Authelia (auth.huri.pommier.dev) — both in
+# the website-demo Terraform (HuRI_website_demo/deploy) — are public.
 ingress:
-  enabled: true
-  className: gce # Use GKE Ingress or nginx if you install it
-  annotations:
-    kubernetes.io/ingress.class: "gce"
-    # Note: GKE Ingress might need a ManagedCertificate or similar for TLS
-  host: huri.pommier.dev # UPDATE THIS
+  enabled: false
+
+# Ray Dashboard (port 8265) ingress. Kept DISABLED on GCP: there is no nginx
+# ingress controller in this cluster, and the dashboard has no auth of its own
+# (same reasoning as the serve socket above — exposing it publicly is unsafe).
+# The chart's ingress-dashboard.yaml template dereferences this block, so it must
+# exist even when disabled. Reach the dashboard ad hoc with a port-forward:
+#   kubectl port-forward -n huri svc/huri-head-svc 8265:8265
+dashboard:
+  ingress:
+    enabled: false
