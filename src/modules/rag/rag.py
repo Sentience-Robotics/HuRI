@@ -2,9 +2,11 @@ import json
 import os
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, cast
 
+import httpx
 from pydantic import BaseModel
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 from ray import serve
 from ray.serve import handle
 
@@ -12,9 +14,6 @@ from src.core.module import ModuleWithHandle, ModuleWithId
 from src.modules.speech_to_text.events import Sentence
 from src.modules.text_to_speech.events import Token
 
-import httpx
-
-from qdrant_client.models import FieldCondition, Filter, MatchValue
 from .qdrant_utils import make_qdrant_client
 
 # Default character persona. Overridable per session via the `persona` key in the
@@ -98,7 +97,7 @@ class RAGHandle:
                 f"Embedding non-JSON response from {url}: {resp.text[:1000]}"
             ) from e
         try:
-            return payload["data"][0]["embedding"]
+            return cast("list[float]", payload["data"][0]["embedding"])
         except (KeyError, IndexError, TypeError) as e:
             raise RuntimeError(
                 f"Embedding unexpected schema from {url}: {str(payload)[:1000]}"
@@ -116,7 +115,9 @@ class RAGHandle:
                 collection_name=collection,
                 scroll_filter=Filter(
                     must=[
-                        FieldCondition(key="_user_id", match=MatchValue(value=_user_id)),
+                        FieldCondition(
+                            key="_user_id", match=MatchValue(value=_user_id)
+                        ),
                         FieldCondition(key="type", match=MatchValue(value="profile")),
                     ]
                 ),
@@ -126,7 +127,11 @@ class RAGHandle:
             )
         except Exception:
             return []
-        return [p.payload.get("text", "") for p in points if p.payload.get("text")]
+        return [
+            p.payload.get("text", "")
+            for p in points
+            if p.payload and p.payload.get("text")
+        ]
 
     def _search(
         self,
@@ -194,7 +199,8 @@ class RAGHandle:
             "it is relevant, but always answer in character. If you don't know "
             "something, improvise in character rather than admitting you lack "
             "information or breaking character. "
-            "IMPORTANT: Reply in 1-3 short sentences maximum. Be extremely concise. No lists, no emojis, no long explanations."
+            "IMPORTANT: Reply in 1-3 short sentences maximum. Be extremely concise."
+            "No lists, no emojis, no long explanations."
         )
         system_prompt = " ".join(parts)
 
@@ -226,28 +232,28 @@ class RAGHandle:
         self, messages: list, max_tokens: int, temperature: float = 0.7
     ) -> AsyncGenerator[str, None]:
         async with self._llm_client.stream(
-                "POST",
-                f"{self._cfg.llm_url}/api/chat",
-                json={
-                    "model": self._cfg.llm_model,
-                    "messages": messages,
-                    "stream": True,
-                    "options": {"num_predict": max_tokens, "temperature": temperature},
-                },
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    delta = chunk.get("message", {}).get("content", "")
-                    if delta:
-                        yield delta
-                    if chunk.get("done"):
-                        return
+            "POST",
+            f"{self._cfg.llm_url}/api/chat",
+            json={
+                "model": self._cfg.llm_model,
+                "messages": messages,
+                "stream": True,
+                "options": {"num_predict": max_tokens, "temperature": temperature},
+            },
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("message", {}).get("content", "")
+                if delta:
+                    yield delta
+                if chunk.get("done"):
+                    return
 
     async def _stream_openai_compatible(
         self,
@@ -261,35 +267,33 @@ class RAGHandle:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         async with self._llm_client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json={
-                    "model": self._cfg.llm_model,
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "stream": True,
-                },
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    payload = line[len("data:"):].strip()
-                    if payload == "[DONE]":
-                        return
-                    try:
-                        chunk = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-                    delta = (
-                        chunk.get("choices", [{}])[0]
-                        .get("delta", {})
-                        .get("content", "")
-                    )
-                    if delta:
-                        yield delta
+            "POST",
+            url,
+            headers=headers,
+            json={
+                "model": self._cfg.llm_model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": True,
+            },
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[len("data:") :].strip()
+                if payload == "[DONE]":
+                    return
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                delta = (
+                    chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                )
+                if delta:
+                    yield delta
 
     async def _llm_stream(
         self,
@@ -391,7 +395,11 @@ class RAG(ModuleWithHandle, ModuleWithId):
     ):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
 
-        print(f"[RAG] Initialized with user_id={_user_id}, language={language}, tone={tone}, response_format={response_format}, max_length={max_length}, temperature={temperature}, max_history_turns={max_history_turns}")
+        print(
+            f"[RAG] Initialized with user_id={_user_id}, language={language}, "
+            f"tone={tone}, response_format={response_format}, max_length={max_length}, "
+            f"temperature={temperature}, max_history_turns={max_history_turns}"
+        )
 
         self.preferences = {
             "language": language,
@@ -410,7 +418,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
         self._max_history_turns = max_history_turns
         self.history: list[dict] = []
 
-    async def process(self, data: Sentence) -> AsyncGenerator[Token, None]:  # type: ignore[override]
+    async def process(self, data: Sentence):
         query = RAGQuery(
             _user_id=self._user_id if self._user_id else "anonymous",
             question=data.text,
@@ -420,7 +428,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
 
         parts: list[str] = []
         stream = self._handle.options(stream=True).stream.remote(query)
-        async for delta in stream:
+        async for delta in stream:  # type: ignore[union-attr]
             parts.append(delta)
             yield Token(text=delta, end=False)
         yield Token(text="", end=True)

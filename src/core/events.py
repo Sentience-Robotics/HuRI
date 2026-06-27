@@ -52,7 +52,8 @@ class EventGraph:
         if event_topic not in ("audio_in",):  # skip mic-frame spam
             logger.info(
                 "[GRAPH] publish topic=%r subscribers=%s",
-                event_topic, [type(m).__name__ for m in subs],
+                event_topic,
+                [type(m).__name__ for m in subs],
             )
         for module in subs:
             asyncio.create_task(self._run(module, data))
@@ -68,11 +69,15 @@ class EventGraph:
                             continue
                         logger.info(
                             "[GRAPH] %s -> %r: %s",
-                            type(module).__name__, module.output_type, _summarize(item),
+                            type(module).__name__,
+                            module.output_type,
+                            _summarize(item),
                         )
                         await self.publish(module.output_type, item)
                 except Exception:
-                    logger.exception("[GRAPH] async generator failed in %s", type(module).__name__)
+                    logger.exception(
+                        "[GRAPH] async generator failed in %s", type(module).__name__
+                    )
 
             else:
                 try:
@@ -80,14 +85,20 @@ class EventGraph:
                     if value is not None:
                         logger.info(
                             "[GRAPH] %s -> %r: %s",
-                            type(module).__name__, module.output_type, _summarize(value),
+                            type(module).__name__,
+                            module.output_type,
+                            _summarize(value),
                         )
                         await self.publish(module.output_type, value)
                 except Exception:
-                    logger.exception("[GRAPH] coroutine failed in %s", type(module).__name__)
+                    logger.exception(
+                        "[GRAPH] coroutine failed in %s", type(module).__name__
+                    )
 
         except Exception:
-            logger.exception("[GRAPH] process() call failed in %s", type(module).__name__)
+            logger.exception(
+                "[GRAPH] process() call failed in %s", type(module).__name__
+            )
 
 
 def _summarize(item) -> str:

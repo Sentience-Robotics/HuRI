@@ -1,7 +1,6 @@
 import asyncio
 import os
-from dataclasses import dataclass
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 import numpy as np
 from ray import serve
@@ -10,7 +9,6 @@ from ray.serve import handle
 from src.core.module import ModuleWithHandle
 from src.modules.gesture.events import Motion
 from src.modules.text_to_speech.events import Audio
-
 
 _HF_REPO = os.environ.get("HURI_EMAGE_REPO", "H-Liu1997/emage_audio")
 _EMAGE_SR = 16000  # EMAGE expects 16 kHz mono audio
@@ -46,7 +44,7 @@ class GestureDeployment:
         device: Optional[str] = None,
         gpu_mem_fraction: float = _GPU_MEM_FRACTION,
     ):
-        print(f"[Gesture] importing torch...")
+        print("[Gesture] importing torch...")
         import torch
 
         # Pin algorithm selection so the kernels warmed below are the same ones
@@ -61,7 +59,7 @@ class GestureDeployment:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
 
-        print(f"[Gesture] importing emage...")
+        print("[Gesture] importing emage...")
         from .emage import EmageAudioModel, EmageVAEConv, EmageVQModel, EmageVQVAEConv
 
         self.device = torch.device(
@@ -84,15 +82,33 @@ class GestureDeployment:
                 print(f"[Gesture] WARNING could not cap GPU memory: {e!r}")
 
         print("[Gesture] loading face_vq...")
-        face_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/face").to(self.device)
+        face_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/face").to(
+            self.device  # type: ignore[arg-type]
+        )
         print("[Gesture] loading upper_vq...")
-        upper_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/upper").to(self.device)
+        upper_vq = EmageVQVAEConv.from_pretrained(
+            hf_repo, subfolder="emage_vq/upper"
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
         print("[Gesture] loading lower_vq...")
-        lower_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/lower").to(self.device)
+        lower_vq = EmageVQVAEConv.from_pretrained(
+            hf_repo, subfolder="emage_vq/lower"
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
         print("[Gesture] loading hands_vq...")
-        hands_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/hands").to(self.device)
+        hands_vq = EmageVQVAEConv.from_pretrained(
+            hf_repo, subfolder="emage_vq/hands"
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
         print("[Gesture] loading global_ae...")
-        global_ae = EmageVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/global").to(self.device)
+        global_ae = EmageVAEConv.from_pretrained(
+            hf_repo, subfolder="emage_vq/global"
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
 
         self.motion_vq = EmageVQModel(
             face_model=face_vq,
@@ -104,11 +120,13 @@ class GestureDeployment:
         self.motion_vq.eval()
 
         print("[Gesture] loading EmageAudioModel...")
-        self.model = EmageAudioModel.from_pretrained(hf_repo).to(self.device)
+        self.model = EmageAudioModel.from_pretrained(hf_repo).to(
+            self.device  # type: ignore[arg-type]
+        )
         self.model.eval()
 
         self._warmup()
-        print(f"[Gesture] ready")
+        print("[Gesture] ready")
 
     def _warmup(self) -> None:
         # The first inference pays one-time costs that are *shape- and
@@ -128,21 +146,24 @@ class GestureDeployment:
         # synchronize so the GPU work is finished before we report ready.
         # Best-effort: a failure here must never prevent the deployment coming up.
         import time
+
         import torch
 
         # Representative window lengths (seconds). The dominant per-window
         # transformer forward is a fixed shape warmed by any window, but the
         # trailing remainder forward varies with total length, so warm a spread.
-        secs = sorted({
-            round(s, 3)
-            for s in (
-                _MIN_CHUNK_SEC,                    # first tiny window of an utterance
-                _CONTEXT_SEC,                      # context-only sized window
-                _CONTEXT_SEC + _MIN_CHUNK_SEC,     # steady-state window
-                _CONTEXT_SEC + 2 * _MIN_CHUNK_SEC, # a larger fresh chunk
-            )
-            if s and s > 0
-        }) or [3.0]
+        secs = sorted(
+            {
+                round(s, 3)
+                for s in (
+                    _MIN_CHUNK_SEC,  # first tiny window of an utterance
+                    _CONTEXT_SEC,  # context-only sized window
+                    _CONTEXT_SEC + _MIN_CHUNK_SEC,  # steady-state window
+                    _CONTEXT_SEC + 2 * _MIN_CHUNK_SEC,  # a larger fresh chunk
+                )
+                if s and s > 0
+            }
+        ) or [3.0]
 
         try:
             t0 = time.time()
@@ -156,10 +177,12 @@ class GestureDeployment:
                         torch.cuda.synchronize(self.device)
                     print(
                         f"[Gesture] warmup pass {pass_idx} {s:.2f}s "
-                        f"({n} samples @ {_WARMUP_SRC_SR} Hz) in {time.time() - ts:.2f}s",
+                        f"({n} samples @ {_WARMUP_SRC_SR} Hz) "
+                        f"in {time.time() - ts:.2f}s",
                     )
             print(
-                f"[Gesture] warmup done ({len(secs)} shapes x2) in {time.time() - t0:.2f}s",
+                f"[Gesture] warmup done ({len(secs)} shapes x2) in "
+                f"{time.time() - t0:.2f}s",
             )
         except Exception as e:  # noqa: BLE001 — warmup is an optimisation, never fatal
             print(f"[Gesture] WARNING warmup failed: {e!r}")
@@ -170,7 +193,10 @@ class GestureDeployment:
 
         if source_sr != _EMAGE_SR:
             import librosa
-            audio_np = librosa.resample(audio_np, orig_sr=source_sr, target_sr=_EMAGE_SR)
+
+            audio_np = librosa.resample(
+                audio_np, orig_sr=source_sr, target_sr=_EMAGE_SR
+            )
 
         audio_ts = torch.from_numpy(audio_np).to(self.device).unsqueeze(0)
         speaker_id = torch.zeros(1, 1, dtype=torch.long, device=self.device)
@@ -180,21 +206,50 @@ class GestureDeployment:
             latent_dict = self.model.inference(audio_ts, speaker_id, self.motion_vq)
 
             cfg = self.model.cfg
-            face_latent = latent_dict["rec_face"] if cfg.lf > 0 and cfg.cf == 0 else None
-            upper_latent = latent_dict["rec_upper"] if cfg.lu > 0 and cfg.cu == 0 else None
-            hands_latent = latent_dict["rec_hands"] if cfg.lh > 0 and cfg.ch == 0 else None
-            lower_latent = latent_dict["rec_lower"] if cfg.ll > 0 and cfg.cl == 0 else None
-            face_index = torch.max(F.log_softmax(latent_dict["cls_face"], dim=2), dim=2)[1] if cfg.cf > 0 else None
-            upper_index = torch.max(F.log_softmax(latent_dict["cls_upper"], dim=2), dim=2)[1] if cfg.cu > 0 else None
-            hands_index = torch.max(F.log_softmax(latent_dict["cls_hands"], dim=2), dim=2)[1] if cfg.ch > 0 else None
-            lower_index = torch.max(F.log_softmax(latent_dict["cls_lower"], dim=2), dim=2)[1] if cfg.cl > 0 else None
+            face_latent = (
+                latent_dict["rec_face"] if cfg.lf > 0 and cfg.cf == 0 else None
+            )
+            upper_latent = (
+                latent_dict["rec_upper"] if cfg.lu > 0 and cfg.cu == 0 else None
+            )
+            hands_latent = (
+                latent_dict["rec_hands"] if cfg.lh > 0 and cfg.ch == 0 else None
+            )
+            lower_latent = (
+                latent_dict["rec_lower"] if cfg.ll > 0 and cfg.cl == 0 else None
+            )
+            face_index = (
+                torch.max(F.log_softmax(latent_dict["cls_face"], dim=2), dim=2)[1]
+                if cfg.cf > 0
+                else None
+            )
+            upper_index = (
+                torch.max(F.log_softmax(latent_dict["cls_upper"], dim=2), dim=2)[1]
+                if cfg.cu > 0
+                else None
+            )
+            hands_index = (
+                torch.max(F.log_softmax(latent_dict["cls_hands"], dim=2), dim=2)[1]
+                if cfg.ch > 0
+                else None
+            )
+            lower_index = (
+                torch.max(F.log_softmax(latent_dict["cls_lower"], dim=2), dim=2)[1]
+                if cfg.cl > 0
+                else None
+            )
 
             all_pred = self.motion_vq.decode(
-                face_latent=face_latent, upper_latent=upper_latent,
-                lower_latent=lower_latent, hands_latent=hands_latent,
-                face_index=face_index, upper_index=upper_index,
-                lower_index=lower_index, hands_index=hands_index,
-                get_global_motion=True, ref_trans=ref_trans[:, 0],
+                face_latent=face_latent,
+                upper_latent=upper_latent,
+                lower_latent=lower_latent,
+                hands_latent=hands_latent,
+                face_index=face_index,
+                upper_index=upper_index,
+                lower_index=lower_index,
+                hands_index=hands_index,
+                get_global_motion=True,
+                ref_trans=ref_trans[:, 0],
             )
 
         t = all_pred["motion_axis_angle"].shape[1]
@@ -271,9 +326,11 @@ class Gesture(ModuleWithHandle):
         # source sample rate; resampling to 16 kHz happens once inside infer().
         self._lock = asyncio.Lock()
         self._sr: Optional[int] = None
-        self._buffer = np.empty(0, dtype=np.float32)  # trailing audio (ctx + unprocessed)
-        self._buf_start = 0       # source-sr sample index of buffer[0] in utterance timeline
-        self._emitted = 0         # source-sr samples whose motion has been emitted
+        self._buffer = np.empty(
+            0, dtype=np.float32
+        )  # trailing audio (ctx + unprocessed)
+        self._buf_start = 0  # source-sr sample index of buffer[0] in utterance timeline
+        self._emitted = 0  # source-sr samples whose motion has been emitted
 
         # Last emitted frame per channel, used to ease the next segment's seam.
         # These persist across the end-of-utterance reset (see _end_utterance) so
@@ -292,7 +349,7 @@ class Gesture(ModuleWithHandle):
         self._buf_start = 0
         self._emitted = 0
 
-    async def process(self, audio: Audio) -> AsyncGenerator[Motion, None]:  # type: ignore[override]
+    async def process(self, audio: Audio):
         # Each chunk arrives as its own process() task on the shared per-session
         # instance, so serialise under a lock to keep the buffer ordered.
         async with self._lock:
@@ -319,7 +376,9 @@ class Gesture(ModuleWithHandle):
             new_samples = global_end - self._emitted
 
             # Wait for more audio unless this is the final flush of the utterance.
-            if new_samples <= 0 or (not end_of_utterance and new_samples < min_new_samples):
+            if new_samples <= 0 or (
+                not end_of_utterance and new_samples < min_new_samples
+            ):
                 if end_of_utterance:
                     self._end_utterance()
                 return

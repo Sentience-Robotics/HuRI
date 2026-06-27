@@ -19,12 +19,20 @@ exclude = """
 """
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 ignore_missing_imports = true
 strict_optional = true
 warn_unused_ignores = true
 warn_return_any = true
 warn_unused_configs = true
+exclude = [
+    'venv',
+    '.venv',
+    'node_modules',
+    'build',
+    'dist'
+]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

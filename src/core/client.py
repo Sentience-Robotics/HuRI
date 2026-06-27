@@ -57,7 +57,7 @@ class Client:
             self._flush_audio()
 
     def _flush_audio(self) -> None:
-        if not self._audio_buf or self._audio_sr is None:
+        if not self._audio_buf or self._audio_sr is None or self.save_audio_dir is None:
             self._audio_buf = []
             return
         audio = np.concatenate(self._audio_buf)
@@ -93,15 +93,17 @@ class Client:
                         print(f"<< bytes ({len(msg)}B, no topic)")
                         continue
                     (topic_len,) = struct.unpack(">H", msg[:2])
-                    topic = msg[2:2 + topic_len].decode()
-                    payload = msg[2 + topic_len:]
+                    topic = msg[2 : 2 + topic_len].decode()
+                    payload = msg[2 + topic_len :]
 
                     if topic == "audio" and len(payload) >= 13:
                         sample_rate, end_flag, pts = struct.unpack(">IBd", payload[:13])
-                        # Samples are native-endian float32 (Sender uses ndarray.tobytes()).
+                        # Samples are native-endian float32
+                        # (Sender uses ndarray.tobytes()).
                         samples = np.frombuffer(payload[13:], dtype=np.float32)
                         print(
-                            f"<< audio: pts={pts:.3f}s samples={samples.size} @ {sample_rate}Hz "
+                            f"<< audio: pts={pts:.3f}s "
+                            f"samples={samples.size} @ {sample_rate}Hz "
                             f"end={bool(end_flag)}"
                         )
                         if self.save_audio_dir:
@@ -118,7 +120,8 @@ class Client:
             pass
         finally:
             if self.save_audio_dir:
-                self._flush_audio()  # save anything left if the stream ended mid-utterance
+                # save anything left if the stream ended mid-utterance
+                self._flush_audio()
 
     async def run(self):
         async with websockets.connect(self.config.huri_url) as ws:

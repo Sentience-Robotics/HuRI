@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 from ray import serve
@@ -104,7 +104,7 @@ class STT(ModuleWithHandle):
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
-    async def process(self, voice: Voice) -> Optional[Transcript]:  # type: ignore[override]
+    async def process(self, voice: Voice):
         if voice.data is None:
             self.silence = True
         else:
