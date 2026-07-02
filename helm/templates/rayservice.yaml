@@ -5,8 +5,26 @@ metadata:
   labels:
     {{- include "huri.labels" . | nindent 4 }}
   annotations:
-    ray.io/initializing-timeout: "20m"
+    # Hard ceiling for the FIRST bring-up: if the Serve apps aren't ready within
+    # this window the RayService enters a TERMINAL failure state, deletes the
+    # RayCluster, and refuses to recreate it until the object is recreated. Cold
+    # GPU bring-up on GCP (gpu-pool 0→1 scale-up + driver install + pulling the
+    # large nvidia image) can exceed the old 20m, which is exactly what tripped
+    # the terminal failure. Override via ray.initializingTimeout.
+    ray.io/initializing-timeout: {{ .Values.ray.initializingTimeout | default "20m" | quote }}
 spec:
+  {{- if .Values.ray.serviceUnhealthySecondThreshold }}
+  # How long the Serve *service* may stay unhealthy before the controller
+  # recreates the RayCluster. Cold GPU bring-up (node provision + driver install
+  # + large nvidia image pull) can take several minutes; the default is too short
+  # and tears the cluster down mid-bootstrap (head + worker terminate together,
+  # then the idle GPU node is reclaimed — an endless up/down loop).
+  serviceUnhealthySecondThreshold: {{ .Values.ray.serviceUnhealthySecondThreshold }}
+  {{- end }}
+  {{- if .Values.ray.deploymentUnhealthySecondThreshold }}
+  # Same idea, per individual Serve deployment (STT/TTS/Gesture wait on the GPU).
+  deploymentUnhealthySecondThreshold: {{ .Values.ray.deploymentUnhealthySecondThreshold }}
+  {{- end }}
   serveConfigV2: |
 {{ .Values.ray.serveConfig | indent 4 }}
   rayClusterConfig:

@@ -111,11 +111,20 @@ resource "google_container_node_pool" "gpu_nodes" {
     auto_upgrade = true
   }
 
+  queued_provisioning {
+    enabled = true
+  }
+
   node_config {
     # machine_type and gpu_type must be compatible: N1 for T4, G2 for L4,
     # A2 for A100 (see variables.tf). guest_accelerator takes the *accelerator*
     # type (nvidia-tesla-t4, ...), never a machine type.
     machine_type = var.gpu_machine_type
+
+    flex_start = true
+    reservation_affinity {
+      consume_reservation_type = "NO_RESERVATION"
+    }
 
     guest_accelerator {
       type  = var.gpu_type

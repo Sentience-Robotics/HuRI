@@ -22,6 +22,21 @@ ray:
   # workerGroups maxReplicas below and the GKE node-pool autoscaling in gke.tf
   # (layer ③). Leave unset/false in the local single-GPU values to stay pinned.
   enableInTreeAutoscaling: true
+  # First-bring-up ceiling (ray.io/initializing-timeout). Must exceed a cold GPU
+  # node provision + driver install + nvidia image pull, or the RayService hits a
+  # TERMINAL failure state and stops recreating the cluster (see rayservice.yaml).
+  # 40m leaves margin for a from-scratch gpu-pool scale-up and large image pull.
+  initializingTimeout: "40m"
+  # Give a cold GPU worker time to come up before KubeRay declares the cluster
+  # unhealthy and recreates it. On GCP the gpu-pool scales 0→1, the node installs
+  # drivers, and the large nvidia image is pulled — easily several minutes. With
+  # the default (~5 min) thresholds the Serve deployments are still UPDATING when
+  # the controller gives up, so it deletes the RayCluster (head + worker
+  # terminate together) and the cycle repeats. 1800s/1200s comfortably covers a
+  # cold node provision + image pull. Paired with ray.io/initializing-timeout
+  # (20m) on the RayService for the very first bring-up.
+  serviceUnhealthySecondThreshold: 1800
+  deploymentUnhealthySecondThreshold: 1200
   serveConfig: |
     proxy_location: EveryNode
     http_options:
@@ -151,6 +166,21 @@ ray:
 
 head:
   serviceType: ClusterIP
+  # Ray autoscaler-v2 (enableInTreeAutoscaling) refuses to start unless it can
+  # detect the head's CPU, via either the num-cpus rayStartParam or a CPU
+  # resource limit. Without this the autoscaler sidecar crashloops with
+  # "failed to detect `CPU` resources for group headgroup", the head never goes
+  # ready, and the RayService hits its 20m init timeout -> terminal failure.
+  # num-cpus: "0" also keeps Ray tasks off the head (they belong on the GPU worker).
+  rayStartParams:
+    num-cpus: "0"
+  resources:
+    requests:
+      cpu: "1"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
   nodeSelector:
     huri.io/system: "true"
   tolerations:
@@ -172,34 +202,55 @@ workerGroups:
     # cudaCacheHostPath is typically not used in GKE unless you have a specific reason
     nodeSelector:
       gpu: nvidia
+    # The gpu-pool nodes carry the GKE GPU taint nvidia.com/gpu=present:NoSchedule.
+    # GKE *usually* auto-injects a matching toleration for pods that request
+    # nvidia.com/gpu, but the KubeRay worker pod must not rely on that admission
+    # path: without this toleration the worker stays Pending on a healthy GPU node
+    # (node provisions Ready, pod never lands, KubeRay tears the cluster down,
+    # autoscaler reclaims the idle node — an endless up/down loop).
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
     # GKE doesn't use the 'nvidia' runtimeClassName by default for GPU nodes
     # The drivers are handled at the node level.
     runtimeClassName: null
-    customResources: '{\"GPU_TYPE_NVIDIA\":1}'
+    # Ray's KubeRay autoscaler parses this field as:
+    #   json.loads(resources_string[1:-1].replace("\\", ""))
+    # i.e. it strips an OUTER pair of double-quotes and removes backslash escapes
+    # before json.loads. So the stored CR value must be a quote-wrapped, escaped
+    # JSON string: "{\"GPU_TYPE_NVIDIA\":1}" (see Ray's ray-cluster.complete.yaml).
+    # The chart wraps this in single quotes (squote), so we write the outer
+    # double-quotes + escaped inner quotes here. WITHOUT the outer quote pair the
+    # autoscaler strips the braces instead, json.loads("GPU_TYPE_NVIDIA":1) fails
+    # with "Extra data", and the head's autoscaler sidecar crashloops.
+    customResources: '"{\"GPU_TYPE_NVIDIA\":1}"'
     rayStartParams:
       num-gpus: "1"
-      # Pin Ray's logical CPU count to match the pod limit below. Each model
+      # Pin Ray's logical CPU count to match the pod requests below. Each model
       # actor requests num_cpus:1, so this — not the GPU fraction — is what caps
-      # how many replicas pack onto the card. a2-highgpu-1g has 12 vCPU, so we
-      # expose 11 and leave ~1 for the kubelet/system daemons + the raylet.
-      num-cpus: "11"
+      # how many replicas pack onto the card.
+      num-cpus: "6"
     resources:
-      # Sized for a2-highgpu-1g (12 vCPU / 85 GB / 1*A100 40GB). Leaves ~1 vCPU
-      # and headroom for the kubelet/system daemons and the raylet itself.
+      # Sized for g2-standard-8 (8 vCPU / 32 GB / 1*L4 24GB), the machine the
+      # tfvars provisions. GKE leaves only ~7.6 allocatable vCPU and ~26-28Gi
+      # allocatable RAM on this node, so requests must stay under that or the
+      # autoscaler reports "Insufficient cpu/memory" and never scales the GPU
+      # pool up. Leaves headroom for the kubelet/system daemons and the raylet.
       limits:
-        cpu: "11"
-        memory: "78Gi"
+        cpu: "7"
+        memory: "24Gi"
         nvidia.com/gpu: "1"
       requests:
-        cpu: "8"
-        memory: "48Gi"
+        cpu: "6"
+        memory: "14Gi"
         nvidia.com/gpu: "1"
 
-  # Disable AMD group for GCP
-  - groupName: gpu-amd
-    replicas: 0
-    minReplicas: 0
-    maxReplicas: 0
+  # NOTE: the AMD worker group is intentionally omitted on GCP. Leaving it in
+  # (even at replicas: 0) makes Ray's autoscaler-v2 validate it and crash with
+  # "failed to detect `CPU` resources for group gpu-amd", because it has no
+  # num-cpus rayStartParam or CPU resource limit. There's no AMD GPU on GCP, so
+  # we simply don't define the group.
 
 models:
   cosytts:
