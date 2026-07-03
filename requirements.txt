@@ -1,24 +1,25 @@
-black
-isort
-mypy
-flake8
-flake8-toml-config
-pytest
+black==26.3.1
+flake8==7.3.0
+flake8-toml-config==1.0.0
+isort==8.0.1
+mypy==1.20.2
+pytest==9.0.3
+pytest-asyncio==1.4.0
 
 
 # server
-numpy
-ray[serve]
-webrtcvad
-faster-whisper
-qdrant-client
-sentence-transformers
-pypdf
-semantic_chunker
+numpy==1.26.4
+ray[serve]==2.55.1
+webrtcvad==2.0.10
+faster-whisper==1.2.1
+qdrant-client==1.18.0
+sentence-transformers==3.2.1
+pypdf==5.1.0
+semantic_chunker==0.2.0
 
 
 # client
-sounddevice
-websockets
-omegaconf
-prompt-toolkit
+sounddevice==0.5.5
+websockets==16.0
+omegaconf==2.3.0
+prompt-toolkit==3.0.52
