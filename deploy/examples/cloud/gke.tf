@@ -111,28 +111,22 @@ resource "google_container_node_pool" "gpu_nodes" {
     auto_upgrade = true
   }
 
-  queued_provisioning {
-    enabled = true
-  }
-
   node_config {
     # machine_type and gpu_type must be compatible: N1 for T4, G2 for L4,
     # A2 for A100 (see variables.tf). guest_accelerator takes the *accelerator*
     # type (nvidia-tesla-t4, ...), never a machine type.
     machine_type = var.gpu_machine_type
 
-    flex_start = true
-    reservation_affinity {
-      consume_reservation_type = "NO_RESERVATION"
-    }
-
     guest_accelerator {
       type  = var.gpu_type
       count = var.gpu_count
     }
 
-    # HDD boot disk to stay off the SSD_TOTAL_GB quota (see system-pool note).
-    disk_type    = "pd-standard"
+    # G2 (L4) and A2 (A100) machine types reject pd-standard (HDD) boot disks —
+    # unlike the N1/e2 system pools, they only accept pd-balanced/pd-ssd/hyperdisk.
+    # So this pool must use SSD-backed pd-balanced (the cheapest G2-compatible
+    # option) and does count against SSD_TOTAL_GB: 50 GB * gpu_max_nodes.
+    disk_type    = "pd-balanced"
     disk_size_gb = 50
 
     # Automatically install NVIDIA drivers
