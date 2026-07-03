@@ -432,7 +432,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
             yield Token(text=delta, end=False)
         yield Token(text="", end=True)
 
-        self._record_turn(data.text, "".join(parts))
+        self._record_turn(question_text, "".join(parts))
 
     def _record_turn(self, question: str, answer: str) -> None:
         """Append this turn to the session history (raw Q/A, no RAG context)
