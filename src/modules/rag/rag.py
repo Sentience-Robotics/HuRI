@@ -4,17 +4,16 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator
 
+import httpx
 from pydantic import BaseModel
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 from ray import serve
 from ray.serve import handle
 
 from src.core.module import ModuleWithHandle, ModuleWithId
+from src.modules.text_to_speech.events import Token
 
-from .events import RAGQuestion, RAGResult
-
-import httpx
-
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from .events import RAGQuestion
 from .qdrant_utils import make_qdrant_client
 
 # Default character persona. Overridable per session via the `persona` key in the

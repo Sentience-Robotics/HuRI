@@ -93,8 +93,8 @@ class Client:
                         print(f"<< bytes ({len(msg)}B, no topic)")
                         continue
                     (topic_len,) = struct.unpack(">H", msg[:2])
-                    topic = msg[2:2 + topic_len].decode()
-                    payload = msg[2 + topic_len:]
+                    topic = msg[2 : 2 + topic_len].decode()
+                    payload = msg[2 + topic_len :]
 
                     if topic == "audio" and len(payload) >= 13:
                         sample_rate, end_flag, pts = struct.unpack(">IBd", payload[:13])
