@@ -40,7 +40,14 @@ applications:
     import_path: src.app:app
     runtime_env:
       env_vars:
+        OLLAMA_BASE_URL: "http://localhost:11434"
+        OLLAMA_API_KEY: "ollama"
+
         RAY_COLOR_PREFIX: "1"
+
+        # Make the CosyVoice repo (and its Matcha-TTS submodule) importable
+        # inside every replica, regardless of cwd.
+        PYTHONPATH: "/home/fifster/Tek/Eip/HuRI/assets/cosyvoice:/home/fifster/Tek/Eip/HuRI/assets/cosyvoice/third_party/Matcha-TTS"
 
         # --- Gesture sliding-window defaults (run in the HuRI CPU actor) ---
         HURI_GESTURE_CONTEXT_SEC: "2.0"
@@ -56,19 +63,19 @@ applications:
         # it as an instruction and intermittently speaks it (prompt leakage).
         HURI_VOICE_TRANSCRIPT: "You are a helpful assistant.<|endofprompt|>Instinct creates its own oppressors and bids us rise up against them."
         # From .Values.models.cosytts.env (mountPath/modelId) — edit for local layout.
-        HURI_MODEL_PATH: /models/cosytts/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+        HURI_MODEL_PATH: assets/cosyvoice_model
         # Path to the CosyVoice repo root containing third_party/Matcha-TTS.
-        HURI_COSY_DIR: /app/cosyvoice
+        HURI_COSY_DIR: assets/cosyvoice
         # From .Values.voiceAssets.env — the reference voice sample.
-        HURI_VOICE_SAMPLE_PATH: /assets/voice.wav
+        HURI_VOICE_SAMPLE_PATH: assets/voice.wav
 
         # --- STT (faster-whisper) ---
         # From .Values.models.whisper.env (mountPath/repoId) — edit for local layout.
-        HURI_STT_MODEL_PATH: /models/whisper/Systran/faster-whisper-base
+        # HURI_STT_MODEL_PATH: /models/whisper/Systran/faster-whisper-base
 
         # --- Gesture (EMAGE) ---
         # From .Values.models.emage.env (mountPath/repoId) — edit for local layout.
-        HURI_EMAGE_REPO: /models/emage/H-Liu1997/emage_audio
+        HURI_EMAGE_REPO: assets/emage_audio
 
         # --- GPU-vendor runtime env (Helm puts these on the worker containers) ---
         NVIDIA_VISIBLE_DEVICES: "all"
@@ -88,7 +95,7 @@ applications:
         num_replicas: 1
         ray_actor_options:
           num_cpus: 1
-          num_gpus: 0.5
+          num_gpus: 0
 
       # RAG: embeddings (API) + LLM client. No GPU needed.
       - name: RAGHandle
@@ -98,7 +105,10 @@ applications:
           num_gpus: 0
         user_config:
           embedding_model: "bge-large-en-v1.5-gguf-Q4_K_M"
-          llm_model: "Qwen3.5-4B-GGUF"
+          llm_model: "mistral:7b"
+          llm_base_url: "http://localhost:11434/v1"   # Ollama's OpenAI-compatible endpoint
+          llm_api_key: "ollama"
+          memory_maintenance_check_hours: 0.5
 
       # GPU split (manual override knob): num_gpus are Ray *scheduling*
       # fractions that let replicas pack onto the same device and bias the

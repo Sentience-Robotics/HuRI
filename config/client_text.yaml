@@ -1,6 +1,6 @@
 huri_url: ws://localhost:8000/session
 
-topic_list: [question, rag_response]
+topic_list: [question, token]
 
 senders:
   text:
@@ -12,4 +12,7 @@ modules:
     args:
       language: en
       tone: formal
-    logging: INFO
+      max_history_turns: 6
+      temperature: 0.7
+      response_format: short
+      persona: ""
