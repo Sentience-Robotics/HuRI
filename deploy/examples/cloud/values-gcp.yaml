@@ -6,7 +6,7 @@ image:
   # Artifact Registry BEFORE `terraform apply` — see ../../../gcp_steps.md §1c.
   # The GPU worker group below overrides this with the nvidia image.
   repository: europe-west4-docker.pkg.dev/hurigcp/huri/huri
-  tag: base-2.55.1@sha256:24fb47df79c2c60b5067c6711b90c5fc43d73da3a396f06779369259945b4b5a
+  tag: base-2.55.1@sha256:ab08831c99822a4488f73fc36f25316b28ce1a740d0277ba2d6f49467a16f783
   pullPolicy: IfNotPresent
 
 # The KubeRay operator is installed as its OWN Helm release
@@ -17,6 +17,11 @@ kuberay:
   install: false
 
 ray:
+  # RayService.spec.rayClusterConfig.rayVersion — MUST be a non-null string or the
+  # KubeRay CRD rejects the object under Helm's server-side apply ("rayVersion:
+  # Invalid value: null"). Match the Ray version baked into the images
+  # (deploy/Dockerfile.base/.nvidia -> FROM rayproject/ray:2.55.1).
+  version: "2.55.1"
   # Layer ② — let the Ray (KubeRay) autoscaler add GPU worker pods when Serve
   # asks for replicas that don't fit on the current pods. Pairs with the
   # workerGroups maxReplicas below and the GKE node-pool autoscaling in gke.tf
@@ -25,8 +30,13 @@ ray:
   # First-bring-up ceiling (ray.io/initializing-timeout). Must exceed a cold GPU
   # node provision + driver install + nvidia image pull, or the RayService hits a
   # TERMINAL failure state and stops recreating the cluster (see rayservice.yaml).
-  # 40m leaves margin for a from-scratch gpu-pool scale-up and large image pull.
-  initializingTimeout: "40m"
+  # Set to 24h (not 40m): during an L4 stockout the gpu-pool can sit "GCE out of
+  # resources" for hours. A short timeout makes the RayService self-destruct and
+  # tear down the head + the *standing Pending GPU worker* — which is the only
+  # thing that keeps the autoscaler asking GCE for capacity. A long timeout keeps
+  # that request alive so the node is grabbed the moment stock returns. Lower it
+  # back to ~40m once you're off scarce/on-demand GPU capacity.
+  initializingTimeout: "24h"
   # Give a cold GPU worker time to come up before KubeRay declares the cluster
   # unhealthy and recreates it. On GCP the gpu-pool scales 0→1, the node installs
   # drivers, and the large nvidia image is pulled — easily several minutes. With
@@ -191,7 +201,7 @@ head:
 workerGroups:
   - groupName: gpu-nvidia
     # Private Artifact Registry (the "GCR"): {location}-docker.pkg.dev/{project}/{repo}/huri:{tag}
-    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:bb64dd8fe06740acfa20356d7c6784d943c0a35227257c6ef57f7173eae6aef5
+    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:8145cc2654e166f53b76a3d4e37b9abb283781300c0d47a180baed87bfbce29e
     replicas: 1
     minReplicas: 1
     # One A100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),

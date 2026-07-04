@@ -125,9 +125,14 @@ resource "google_container_node_pool" "gpu_nodes" {
     # G2 (L4) and A2 (A100) machine types reject pd-standard (HDD) boot disks —
     # unlike the N1/e2 system pools, they only accept pd-balanced/pd-ssd/hyperdisk.
     # So this pool must use SSD-backed pd-balanced (the cheapest G2-compatible
-    # option) and does count against SSD_TOTAL_GB: 50 GB * gpu_max_nodes.
+    # option) and does count against SSD_TOTAL_GB: 150 GB * gpu_max_nodes.
+    #
+    # 150 GB (not 50): the huri:nvidia serve image is large, and a 50 GB disk
+    # leaves only ~17 GB allocatable ephemeral-storage after GKE reservations —
+    # kubelet then evicts the Ray worker for ephemeral-storage pressure before it
+    # finishes init. 150 GB gives ~110 GB ephemeral headroom.
     disk_type    = "pd-balanced"
-    disk_size_gb = 50
+    disk_size_gb = 150
 
     # Automatically install NVIDIA drivers
     # This is recommended for GKE

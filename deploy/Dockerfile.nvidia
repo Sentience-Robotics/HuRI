@@ -4,14 +4,18 @@ WORKDIR /app
 
 # Full CUDA 12.1 dependency stack (CosyVoice2, faster-whisper, TensorRT, …).
 # PyTorch cu121 wheels live on the PyTorch index; TensorRT wheels on the NGC index.
+# constraints.txt pins protobuf==4.25.8 (see the file). Passed to every pip
+# install below so serve_requirements.txt's deps (qdrant-client, onnxruntime —
+# no protobuf upper bound) can't bump protobuf past 4.x and break Ray Serve.
+COPY constraints.txt /app
 COPY requirements-nvidia.txt /app
-RUN pip install --no-cache-dir \
+RUN pip install --no-cache-dir -c /app/constraints.txt \
     --extra-index-url https://download.pytorch.org/whl/cu121 \
     --extra-index-url https://pypi.ngc.nvidia.com \
     -r requirements-nvidia.txt
 
 COPY serve_requirements.txt /app
-RUN pip install --no-cache-dir -r serve_requirements.txt
+RUN pip install --no-cache-dir -c /app/constraints.txt -r serve_requirements.txt
 
 USER root
 
