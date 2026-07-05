@@ -241,6 +241,12 @@ workerGroups:
       # actor requests num_cpus:1, so this — not the GPU fraction — is what caps
       # how many replicas pack onto the card.
       num-cpus: "6"
+    # PVCs mounted into this (L4) worker: whisper (STT) + cosytts (TTS). Their
+    # download Jobs are pinned to this same gpu node (see models.* above) so the
+    # zonal RWO PVCs bind in the L4's zone. emage stays unmounted (disabled).
+    mountedModels:
+      - whisper
+      - cosytts
     resources:
       # Sized for g2-standard-8 (8 vCPU / 32 GB / 1*L4 24GB), the machine the
       # tfvars provisions. GKE leaves only ~7.6 allocatable vCPU and ~26-28Gi
@@ -262,26 +268,76 @@ workerGroups:
   # num-cpus rayStartParam or CPU resource limit. There's no AMD GPU on GCP, so
   # we simply don't define the group.
 
+# Voice models (STT/TTS) mount on the gpu-nvidia (L4) worker. Their PVCs use
+# standard-rwo — a ZONAL ReadWriteOnce PD that can only attach to a node in the
+# zone it was provisioned in. The gpu-pool spans us-central1-a/b/c (gpu_node_zones)
+# so the L4 can land in any of them, while the system pool is pinned to
+# us-central1-a. So the download Jobs MUST run in the L4's zone, i.e. ON the gpu
+# node itself (nodeSelector gpu: nvidia), so WaitForFirstConsumer binds each PVC
+# where the worker can mount it. That node carries nvidia.com/gpu=present:NoSchedule
+# and the Job requests no GPU, so GKE won't auto-inject a toleration — we add it.
 models:
   cosytts:
+    enabled: true
     nodeSelector:
-      huri.io/system: "true"
+      gpu: nvidia
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
     pvc:
       storageClassName: "standard-rwo"
+      size: 20Gi
+      accessModes:
+        - ReadWriteOnce
+    mountPath: /models/cosytts
+    forceDownload: false
+    modelSource:
+      type: modelscope
+      modelId: FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+    env:
+      HURI_MODEL_PATH: /models/cosytts/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+      HURI_COSY_DIR: /app/cosyvoice
   whisper:
+    enabled: true
     nodeSelector:
-      huri.io/system: "true"
+      gpu: nvidia
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
     pvc:
       storageClassName: "standard-rwo"
+      size: 2Gi
+      accessModes:
+        - ReadWriteOnce
+    mountPath: /models/whisper
+    modelSource:
+      type: huggingface
+      repoId: Systran/faster-whisper-base
+    env:
+      HURI_STT_MODEL_PATH: /models/whisper/Systran/faster-whisper-base
+  # emage (gesture) weights stay DISABLED on GCP: GestureGeneration is already
+  # HEALTHY without them. Leave off until it's actually needed.
   emage:
     nodeSelector:
       huri.io/system: "true"
     pvc:
       storageClassName: "standard-rwo"
 
+# TTS reference voice sample. The PVC (WaitForFirstConsumer) binds when the L4
+# worker mounts it (mountVoiceAssets: true); populate it AFTER the worker is
+# Running with: kubectl cp voice.wav <worker-pod>:/assets/voice.wav -n huri
 voiceAssets:
+  enabled: true
   pvc:
     storageClassName: "standard-rwo"
+    size: 100Mi
+    accessModes:
+      - ReadWriteOnce
+  mountPath: /assets
+  env:
+    HURI_VOICE_SAMPLE_PATH: /assets/voice.wav
 
 # The raw Ray Serve websocket (huri-serve-svc:8000) is INTENTIONALLY not exposed
 # by an Ingress. It has no authentication of its own — the website backend is the

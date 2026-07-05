@@ -47,6 +47,13 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with $model.tolerations }}
+      # Lets the download Job schedule onto a tainted node (e.g. a GPU node with
+      # nvidia.com/gpu=present:NoSchedule) so the PVC binds in that node's zone —
+      # required when the mounting worker is a GPU pod on a zonal RWO PVC.
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: models
           persistentVolumeClaim:
