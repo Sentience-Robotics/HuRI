@@ -12,7 +12,12 @@ resource "kubernetes_secret_v1" "litellm" {
     namespace = "huri"
   }
   data = {
-    GEMINI_API_KEY = data.google_secret_manager_secret_version.gemini_api_key.secret_data
+    # trimspace() guards against a trailing newline/CRLF in the Secret Manager
+    # value (e.g. created with `echo` instead of `printf`). LiteLLM puts this
+    # key straight into the outbound x-goog-api-key header, and aiohttp rejects
+    # any header value containing \r or \n ("header injection"), which surfaces
+    # as a 500 back to the RAG caller.
+    GEMINI_API_KEY = trimspace(data.google_secret_manager_secret_version.gemini_api_key.secret_data)
   }
 
   # The huri namespace is created by the qdrant release; reuse it.
