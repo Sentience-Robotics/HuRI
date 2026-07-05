@@ -11,8 +11,8 @@ cluster_name = "huri-ray-cluster"
 #   A100 40GB -> gpu_type = "nvidia-tesla-a100", gpu_machine_type = "a2-highgpu-1g"
 #   A100 80GB -> gpu_type = "nvidia-tesla-a100", gpu_machine_type = "a2-ultragpu-1g"
 # A2 machines bundle their A100(s); gpu_count must match the machine (1 here).
-gpu_type         = "nvidia-l4"
-gpu_machine_type = "g2-standard-8"
+gpu_type         = "nvidia-tesla-v100"
+gpu_machine_type = "n1-standard-8"
 gpu_count        = 1
 
 # Multi-zone GPU pool: span every zone in `region` so the autoscaler (with

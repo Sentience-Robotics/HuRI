@@ -91,12 +91,12 @@ ray:
         #
         # GPU PACKING NOTE — num_gpus below is a *logical* Ray fraction, not a
         # memory reservation; it only controls how many actors Ray packs per
-        # card. Sized for the A100 40GB (a2-highgpu-1g): each model's real
+        # card. Sized for the V100 16GB (n1-standard-8): each model's real
         # footprint is a few GB (Whisper base <1GB, CosyVoice3 ~4GB, EMAGE ~3GB),
-        # far under 40GB, so the fractions are deliberately small to pack many
+        # far under 16GB, so the fractions are deliberately small to pack many
         # replicas onto ONE card before autoscaling buys a second:
         #   baseline (1 each): STT 0.2 + TTS 0.1 + Gesture 0.1 = 0.4
-        #   one full A100 e.g.: STT*3 + TTS*2 + Gesture*2 = 1.0
+        #   one full V100 e.g.: STT*3 + TTS*2 + Gesture*2 = 1.0
         # Shrink further for more density — the binding limit is logical packing,
         # not memory. (On a 16GB T4 you'd raise these back toward ~0.5/0.2/0.2.)
         # ──────────────────────────────────────────────────────────────────
@@ -204,7 +204,7 @@ workerGroups:
     image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:8145cc2654e166f53b76a3d4e37b9abb283781300c0d47a180baed87bfbce29e
     replicas: 1
     minReplicas: 1
-    # One A100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),
+    # One V100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),
     # so maxReplicas = 1. The autoscaler packs multiple Serve model actors onto
     # this single card via fractional GPU requests, not multiple pods.
     maxReplicas: 1
@@ -241,15 +241,15 @@ workerGroups:
       # actor requests num_cpus:1, so this — not the GPU fraction — is what caps
       # how many replicas pack onto the card.
       num-cpus: "6"
-    # PVCs mounted into this (L4) worker: whisper (STT) + cosytts (TTS). Their
+    # PVCs mounted into this (V100) worker: whisper (STT) + cosytts (TTS). Their
     # download Jobs are pinned to this same gpu node (see models.* above) so the
-    # zonal RWO PVCs bind in the L4's zone. emage stays unmounted (disabled).
+    # zonal RWO PVCs bind in the V100's zone. emage stays unmounted (disabled).
     mountedModels:
       - whisper
       - cosytts
     resources:
-      # Sized for g2-standard-8 (8 vCPU / 32 GB / 1*L4 24GB), the machine the
-      # tfvars provisions. GKE leaves only ~7.6 allocatable vCPU and ~26-28Gi
+      # Sized for n1-standard-8 (8 vCPU / 30 GB / 1*V100 16GB), the machine the
+      # tfvars provisions. GKE leaves only ~7.5 allocatable vCPU and ~26Gi
       # allocatable RAM on this node, so requests must stay under that or the
       # autoscaler reports "Insufficient cpu/memory" and never scales the GPU
       # pool up. Leaves headroom for the kubelet/system daemons and the raylet.
@@ -268,11 +268,12 @@ workerGroups:
   # num-cpus rayStartParam or CPU resource limit. There's no AMD GPU on GCP, so
   # we simply don't define the group.
 
-# Voice models (STT/TTS) mount on the gpu-nvidia (L4) worker. Their PVCs use
+# Voice models (STT/TTS) mount on the gpu-nvidia (V100) worker. Their PVCs use
 # standard-rwo — a ZONAL ReadWriteOnce PD that can only attach to a node in the
-# zone it was provisioned in. The gpu-pool spans us-central1-a/b/c (gpu_node_zones)
-# so the L4 can land in any of them, while the system pool is pinned to
-# us-central1-a. So the download Jobs MUST run in the L4's zone, i.e. ON the gpu
+# zone it was provisioned in. The gpu-pool is pinned to us-central1-c (gpu_node_zones
+# in terraform.tfvars) so the V100 lands there with the already-bound PVCs, while the
+# system pool is pinned to us-central1-a. So the download Jobs MUST run in the V100's
+# zone, i.e. ON the gpu
 # node itself (nodeSelector gpu: nvidia), so WaitForFirstConsumer binds each PVC
 # where the worker can mount it. That node carries nvidia.com/gpu=present:NoSchedule
 # and the Job requests no GPU, so GKE won't auto-inject a toleration — we add it.
@@ -325,7 +326,7 @@ models:
     pvc:
       storageClassName: "standard-rwo"
 
-# TTS reference voice sample. The PVC (WaitForFirstConsumer) binds when the L4
+# TTS reference voice sample. The PVC (WaitForFirstConsumer) binds when the V100
 # worker mounts it (mountVoiceAssets: true); populate it AFTER the worker is
 # Running with: kubectl cp voice.wav <worker-pod>:/assets/voice.wav -n huri
 voiceAssets:
