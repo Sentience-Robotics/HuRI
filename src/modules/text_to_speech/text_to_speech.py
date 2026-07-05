@@ -83,13 +83,83 @@ class TTSDeployment:
             voice_sample_transcript = raw
         voice_sample_transcript = _normalize_transcript(voice_sample_transcript)
 
-        self.model = CosyVoice3(model_dir=model_path, load_trt=False)
+        # fp16 is the whole point of running on a bandwidth-rich GPU (e.g. V100):
+        # it routes CosyVoice's LM/flow/vocoder matmuls through the fp16 tensor
+        # cores and halves memory traffic. CosyVoice3 defaults fp16=False (fp32),
+        # which leaves that advantage entirely unused. Default ON when a CUDA
+        # device is present; override with HURI_TTS_FP16 (fp16 needs CUDA, so it
+        # is forced off on CPU regardless).
+        import torch
+
+        _fp16_env = os.environ.get("HURI_TTS_FP16")
+        if _fp16_env is not None:
+            fp16 = _fp16_env.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            fp16 = torch.cuda.is_available()
+        if fp16 and not torch.cuda.is_available():
+            print("[TTS] fp16 requested but no CUDA device; falling back to fp32")
+            fp16 = False
+
+        # TensorRT accelerates the flow-matching estimator (often the single
+        # biggest TTS speedup) but builds a device-specific engine at startup
+        # (~minutes) and needs validation per GPU arch. OFF by default; flip
+        # HURI_TTS_TRT=1 to experiment once fp16 is confirmed working.
+        load_trt = os.environ.get("HURI_TTS_TRT", "").strip().lower() in (
+            "1", "true", "yes", "on"
+        )
+
+        print(f"[TTS] loading CosyVoice3 (fp16={fp16}, load_trt={load_trt}) from {model_path!r}")
+        self.model = CosyVoice3(model_dir=model_path, load_trt=load_trt, fp16=fp16)
         self.sample_rate: int = self.model.sample_rate
 
         self.prompt_speech = voice_sample_path
         self.prompt_text: str = voice_sample_transcript
 
         self._text_queues: dict[str, queue.Queue] = {}
+
+        # Pay CosyVoice's first-synth costs now, at deploy time, rather than on
+        # the first user utterance (see _warmup).
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Run one throwaway synthesis so the first real utterance is hot.
+
+        The first CosyVoice call pays one-time costs — CUDA context init,
+        cuBLAS/cuDNN algorithm selection, the LM/flow/vocoder first-call
+        compiles, and the caching allocator's first growth — that otherwise land
+        on the first user utterance and stall it for seconds. Draining a dummy
+        synth through the *real* fp16 path (same prompt, stream=True) pays them
+        upfront, mirroring the Gesture module's warmup.
+
+        Best-effort: never fatal. The reference sample (voice.wav) is uploaded to
+        its PVC *after* the worker starts, so on a brand-new volume it may be
+        absent on first boot — warmup is skipped then and runs on the next
+        restart once the PVC holds the file.
+        """
+        import time
+
+        if not os.path.isfile(self.prompt_speech):
+            print(
+                f"[TTS] warmup skipped: reference sample {self.prompt_speech!r} "
+                "not present yet (upload voice.wav, then restart to warm)"
+            )
+            return
+        try:
+            t0 = time.time()
+
+            def _dummy_text():
+                yield "Hello, this is a warm up."
+
+            audio_iter = self.model.inference_zero_shot(
+                _dummy_text(),
+                self.prompt_text,
+                self.prompt_speech,
+                stream=True,
+            )
+            chunks = sum(1 for _ in audio_iter)
+            print(f"[TTS] warmup done ({chunks} chunks) in {time.time() - t0:.2f}s")
+        except Exception as e:  # noqa: BLE001 — warmup is an optimisation, never fatal
+            print(f"[TTS] WARNING warmup failed: {e!r}")
 
     async def get_sample_rate(self) -> int:
         return self.sample_rate

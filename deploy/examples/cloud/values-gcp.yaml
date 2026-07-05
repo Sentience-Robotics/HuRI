@@ -201,7 +201,7 @@ head:
 workerGroups:
   - groupName: gpu-nvidia
     # Private Artifact Registry (the "GCR"): {location}-docker.pkg.dev/{project}/{repo}/huri:{tag}
-    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:8145cc2654e166f53b76a3d4e37b9abb283781300c0d47a180baed87bfbce29e
+    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:6f1746befdff4f6b4613969686dd23540ff2724ca1629413bf71ac1a0f84f8d6
     replicas: 1
     minReplicas: 1
     # One V100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),
