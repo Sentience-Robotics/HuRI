@@ -32,7 +32,7 @@ class HuRI:
         self,
         modules: Dict[str, Type[Module]],
         handles: Dict[str, handle.DeploymentHandle],
-        events: Dict[str, Type[EventData]],
+        events: Dict[str, Type[EventData | bytes]],
     ) -> None:
         self.module_factory = ModuleFactory(handles)
         self.event_factory = EventDataFactory()
@@ -78,21 +78,25 @@ class HuRI:
         client_config_raw: Dict = await ws.receive_json()
         client_config = ClientConfig.from_dict(client_config_raw)
 
-        user_id = client_config_raw.get("user_id") or str(uuid.uuid4())
-
-        senders: List[Module] = [
-            Sender(ws, topic) for topic in client_config.topic_list
+        topic_list = [
+            topic
+            for hook_config in client_config.hooks.values()
+            for topic in hook_config.topics
         ]
+        senders: List[Module] = [Sender(ws, topic) for topic in topic_list]
         modules: List[Module] = (
-            self.module_factory.create_from_config(user_id, client_config.modules)
+            self.module_factory.create_from_config(
+                client_config.user_id, client_config.modules
+            )
             + senders
         )
 
-        await ws.send_json({"type": "session_init", "user_id": user_id})
+        await ws.send_json({"type": "session_init", "user_id": client_config.user_id})
 
         session_id = str(uuid.uuid4())
         self.clients[session_id] = Session(modules)
-        print(f"Client registered with _user_id={user_id}, config: {client_config}")
+        print(f"Client registered with _user_id={client_config.user_id}, \
+config: {client_config}")
 
         async def receive_loop(session: Session, ws: WebSocket):
             try:
@@ -112,18 +116,18 @@ class HuRI:
                         msg_text = msg["text"]
                         event = json.loads(msg_text)
                         topic = event["topic"]
-                        data = event["data"]
+                        data = event["data"]  # TODO client/server one function
 
                     data = self.event_factory.create(topic, data)
 
                     await session.publish(topic, data)
 
             except RuntimeError as e:
-                print(f"[ERROR] Client {user_id}:", e)
+                print(f"[ERROR] Client {client_config.user_id}:", e)
             except WebSocketDisconnect:
                 pass
             finally:
-                print(f"Client {user_id} disconnected")
+                print(f"Client {client_config.user_id} disconnected")
 
         try:
             await receive_loop(self.clients[session_id], ws)

@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 
 from src.core.client import Client
 from src.core.dataclasses.config import ClientConfig
+from src.core.user_config import get_or_create_and_save_user_id
 
 
 def load_client_config(path: str) -> ClientConfig:
@@ -15,6 +16,10 @@ def load_client_config(path: str) -> ClientConfig:
 
     if not isinstance(raw_resolved, Dict):
         raise RuntimeError("error yaml does not output a dict")
+
+    user_id_file_path = raw_resolved.get("user_id_file_path")
+    user_id = get_or_create_and_save_user_id(user_id_file_path)
+    raw_resolved["user_id"] = user_id
 
     return ClientConfig.from_dict(raw_resolved)
 
@@ -26,21 +31,11 @@ async def launch_client():
         required=True,
         help="Path to Client config file (YAML)",
     )
-    parser.add_argument(
-        "--save-audio",
-        nargs="?",
-        const="audio_dumps",
-        default=None,
-        metavar="DIR",
-        help="Save streamed TTS audio to .wav files (one per utterance) in DIR "
-        "for quality-checking. Defaults to ./audio_dumps when the flag is given "
-        "without a value.",
-    )
 
     args = parser.parse_args()
     config = load_client_config(args.config)
 
-    await Client(config=config, save_audio_dir=args.save_audio).run()
+    await Client(config=config).run()
 
 
 if __name__ == "__main__":
