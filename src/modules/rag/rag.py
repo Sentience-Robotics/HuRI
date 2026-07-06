@@ -17,6 +17,12 @@ import httpx
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 from .qdrant_utils import make_qdrant_client
 
+# Reserved _user_id for documents visible to EVERY user (e.g. the HuRI project
+# overview). Retrieval matches the querying user's own id OR this shared id, so
+# one ingested copy is reachable by all sessions. Ingest global docs with
+# `ingestion.py --user-id __shared__ ...`. Keep in sync with any ingestion.
+SHARED_USER_ID = "__shared__"
+
 # Default character persona. Overridable per session via the `persona` key in the
 # client config's module args, or globally via HURI_RAG_DEFAULT_PERSONA in the
 # Serve app runtime_env.env_vars (see deploy values.yaml) — no rebuild needed.
@@ -137,11 +143,24 @@ class RAGHandle:
     ) -> list[dict]:
         qdrant_filter: Any = None
         if filters:
-            conditions: Any = [
-                FieldCondition(key=k, match=MatchValue(value=v))
-                for k, v in filters.items()
-            ]
-            qdrant_filter = Filter(must=conditions)
+            must: Any = []
+            should: Any = None
+            for k, v in filters.items():
+                if k == "_user_id":
+                    # Match the querying user's own docs OR the shared/global
+                    # partition, so "all users" docs (ingested under
+                    # SHARED_USER_ID) are retrieved alongside personal ones.
+                    should = [
+                        FieldCondition(key=k, match=MatchValue(value=v)),
+                        FieldCondition(
+                            key=k, match=MatchValue(value=SHARED_USER_ID)
+                        ),
+                    ]
+                else:
+                    must.append(FieldCondition(key=k, match=MatchValue(value=v)))
+            # With `should`, Qdrant requires >=1 of the OR conditions to match;
+            # any other filters stay as `must` (AND).
+            qdrant_filter = Filter(must=must or None, should=should)
 
         try:
             results = qdrant.query_points(
