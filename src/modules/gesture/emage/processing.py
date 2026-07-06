@@ -1,4 +1,5 @@
 import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -121,7 +122,7 @@ def velocity2position(data_seq, dt, init_pos):
         if i == 0:
             res_trans.append(init_pos.unsqueeze(1))
         else:
-            res = data_seq[:, i - 1:i] * dt + res_trans[-1]
+            res = data_seq[:, i - 1 : i] * dt + res_trans[-1]
             res_trans.append(res)
     return torch.cat(res_trans, dim=1)
 
@@ -156,13 +157,15 @@ class Quantizer(nn.Module):
         assert z.shape[-1] == self.e_dim
         z_flattened = z.contiguous().view(-1, self.e_dim)
         d = (
-            torch.sum(z_flattened ** 2, dim=1, keepdim=True)
-            + torch.sum(self.embedding.weight ** 2, dim=1)
+            torch.sum(z_flattened**2, dim=1, keepdim=True)
+            + torch.sum(self.embedding.weight**2, dim=1)
             - 2 * torch.matmul(z_flattened, self.embedding.weight.t())
         )
         min_encoding_indices = torch.argmin(d, dim=1)
         z_q = self.embedding(min_encoding_indices).view(z.shape)
-        loss = torch.mean((z_q - z.detach()) ** 2) + self.beta * torch.mean((z_q.detach() - z) ** 2)
+        loss = torch.mean((z_q - z.detach()) ** 2) + self.beta * torch.mean(
+            (z_q.detach() - z) ** 2
+        )
         z_q = z + (z_q - z).detach()
         min_encodings = F.one_hot(min_encoding_indices, self.n_e).type(z.dtype)
         e_mean = torch.mean(min_encodings, dim=0)
@@ -173,8 +176,8 @@ class Quantizer(nn.Module):
         assert z.shape[-1] == self.e_dim
         z_flattened = z.contiguous().view(-1, self.e_dim)
         d = (
-            torch.sum(z_flattened ** 2, dim=1, keepdim=True)
-            + torch.sum(self.embedding.weight ** 2, dim=1)
+            torch.sum(z_flattened**2, dim=1, keepdim=True)
+            + torch.sum(self.embedding.weight**2, dim=1)
             - 2 * torch.matmul(z_flattened, self.embedding.weight.t())
         )
         min_encoding_indices = torch.argmin(d, dim=1)
@@ -288,24 +291,51 @@ class VQDecoderV5(nn.Module):
 
 
 class BasicBlock(nn.Module):
-    def __init__(self, inplanes, planes, ker_size, stride=1, downsample=None, dilation=1, first_dilation=None, act_layer=nn.LeakyReLU, norm_layer=nn.BatchNorm1d):
+    def __init__(
+        self,
+        inplanes,
+        planes,
+        ker_size,
+        stride=1,
+        downsample=None,
+        dilation=1,
+        first_dilation=None,
+        act_layer=nn.LeakyReLU,
+        norm_layer=nn.BatchNorm1d,
+    ):
         super().__init__()
         self.conv1 = nn.Conv1d(
-            inplanes, planes, kernel_size=ker_size, stride=stride,
-            padding=first_dilation, dilation=dilation, bias=True,
+            inplanes,
+            planes,
+            kernel_size=ker_size,
+            stride=stride,
+            padding=first_dilation,
+            dilation=dilation,
+            bias=True,
         )
         self.bn1 = norm_layer(planes)
         self.act1 = act_layer(inplace=True)
         self.conv2 = nn.Conv1d(
-            planes, planes, kernel_size=ker_size, padding=ker_size // 2,
-            dilation=dilation, bias=True,
+            planes,
+            planes,
+            kernel_size=ker_size,
+            padding=ker_size // 2,
+            dilation=dilation,
+            bias=True,
         )
         self.bn2 = norm_layer(planes)
         self.act2 = act_layer(inplace=True)
         if downsample is not None:
             self.downsample = nn.Sequential(
-                nn.Conv1d(inplanes, planes, stride=stride, kernel_size=ker_size,
-                          padding=first_dilation, dilation=dilation, bias=True),
+                nn.Conv1d(
+                    inplanes,
+                    planes,
+                    stride=stride,
+                    kernel_size=ker_size,
+                    padding=first_dilation,
+                    dilation=dilation,
+                    bias=True,
+                ),
                 norm_layer(planes),
             )
         else:
@@ -330,10 +360,16 @@ class WavEncoder(nn.Module):
         super().__init__()
         self.out_dim = out_dim
         self.feat_extractor = nn.Sequential(
-            BasicBlock(audio_in, out_dim // 4, 15, 5, first_dilation=1600, downsample=True),
-            BasicBlock(out_dim // 4, out_dim // 4, 15, 6, first_dilation=0, downsample=True),
+            BasicBlock(
+                audio_in, out_dim // 4, 15, 5, first_dilation=1600, downsample=True
+            ),
+            BasicBlock(
+                out_dim // 4, out_dim // 4, 15, 6, first_dilation=0, downsample=True
+            ),
             BasicBlock(out_dim // 4, out_dim // 4, 15, 1, first_dilation=7),
-            BasicBlock(out_dim // 4, out_dim // 2, 15, 6, first_dilation=0, downsample=True),
+            BasicBlock(
+                out_dim // 4, out_dim // 2, 15, 6, first_dilation=0, downsample=True
+            ),
             BasicBlock(out_dim // 2, out_dim // 2, 15, 1, first_dilation=7),
             BasicBlock(out_dim // 2, out_dim, 15, 3, first_dilation=0, downsample=True),
         )
@@ -367,14 +403,16 @@ class PeriodicPositionalEncoding(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
         pe = torch.zeros(period, d_model)
         position = torch.arange(0, period, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)
         repeat_num = (max_seq_len // period) + 1
         pe = pe.repeat(1, repeat_num, 1)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
+        x = x + self.pe[:, : x.size(1), :]
         return self.dropout(x)

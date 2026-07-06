@@ -15,8 +15,3 @@ class Transcript(EventData):
 @dataclass
 class Voice(EventData):
     data: Optional[np.ndarray]
-
-
-@dataclass
-class Sentence(EventData):
-    text: str

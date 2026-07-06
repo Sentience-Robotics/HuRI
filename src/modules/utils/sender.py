@@ -39,7 +39,11 @@ class Sender(Module):
         elif isinstance(data, Audio):
             logger.info(
                 "[Sender:%s] Audio samples=%d sr=%d end=%s pts=%.3fs",
-                self.input_type, data.data.shape[0], data.sample_rate, data.end, data.pts,
+                self.input_type,
+                data.data.shape[0],
+                data.sample_rate,
+                data.end,
+                data.pts,
             )
             header = struct.pack(">IBd", data.sample_rate, int(data.end), data.pts)
             await self.ws.send_bytes(self._prefix(header + data.data.tobytes()))
@@ -47,7 +51,10 @@ class Sender(Module):
             n_frames = data.poses.shape[0]
             logger.info(
                 "[Sender:%s] Motion frames=%d fps=%d pts=%.3fs",
-                self.input_type, n_frames, data.fps, data.pts,
+                self.input_type,
+                n_frames,
+                data.fps,
+                data.pts,
             )
             header = struct.pack(">dII", data.pts, data.fps, n_frames)
             body = (
