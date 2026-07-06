@@ -1,8 +1,8 @@
+import asyncio
 import json
 import os
 import traceback
 import uuid
-import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, AsyncGenerator
@@ -49,7 +49,7 @@ class RAGDeploymentConfig(BaseModel):
     verify_ssl: bool = True
     top_k: int = 5
     score_threshold: float = 0.5
-    
+
     memory_collection: str = "conversations"
     memory_top_k: int = 3
     memory_half_life_days: float = 5.0
@@ -78,6 +78,7 @@ class RAGHandle:
     """Stateless RAG processor. Streams LLM tokens to the caller."""
 
     _MAINTENANCE_MARKER_ID = "00000000-0000-0000-0000-00000000feed"
+
     def __init__(self, **kwargs):
         self._cfg = RAGDeploymentConfig(**kwargs)
         self._apply_config()
@@ -154,6 +155,7 @@ class RAGHandle:
 
     def _ensure_memory_collection(self, vector_size: int) -> None:
         from qdrant_client.models import Distance, VectorParams
+
         names = [c.name for c in self._qdrant.get_collections().collections]
         if self._cfg.memory_collection not in names:
             self._qdrant.create_collection(
@@ -161,10 +163,14 @@ class RAGHandle:
                 vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
             )
 
-    async def _llm_complete(self, system_prompt: str, user_prompt: str, max_tokens: int = 300) -> str:
+    async def _llm_complete(
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 300
+    ) -> str:
         """Non-streamed convenience wrapper over _llm_stream."""
         parts = []
-        async for d in self._llm_stream(system_prompt, user_prompt, {"max_length": max_tokens}, None):
+        async for d in self._llm_stream(
+            system_prompt, user_prompt, {"max_length": max_tokens}, None
+        ):
             parts.append(d)
         return "".join(parts)
 
@@ -172,15 +178,19 @@ class RAGHandle:
         importance = payload.get("importance", 3)
         half_life = max(self._cfg.memory_half_life_days * (importance / 5.0), 0.5)
         try:
-            last = datetime.fromisoformat(payload.get("last_accessed") or payload["created_at"])
+            last = datetime.fromisoformat(
+                payload.get("last_accessed") or payload["created_at"]
+            )
             age_days = (datetime.now() - last).total_seconds() / 86400.0
         except Exception:
             age_days = 0.0
         recency = 0.5 ** (age_days / half_life)
         cfg = self._cfg
-        return (cfg.memory_w_relevance * relevance
-                + cfg.memory_w_recency * recency
-                + cfg.memory_w_importance * (importance / 10.0))
+        return (
+            cfg.memory_w_relevance * relevance
+            + cfg.memory_w_recency * recency
+            + cfg.memory_w_importance * (importance / 10.0)
+        )
 
     def _search_memories(self, query_vector: list[float], _user_id: str) -> list[str]:
         """Retrieve, re-rank (relevance+recency+importance), reinforce, return texts."""
@@ -189,16 +199,24 @@ class RAGHandle:
                 collection_name=self._cfg.memory_collection,
                 query=query_vector,
                 query_filter=Filter(
-                    must=[FieldCondition(key="_user_id", match=MatchValue(value=_user_id))],
-                    must_not=[FieldCondition(key="type", match=MatchValue(value="maintenance_marker"))],
+                    must=[
+                        FieldCondition(key="_user_id", match=MatchValue(value=_user_id))
+                    ],
+                    must_not=[
+                        FieldCondition(
+                            key="type", match=MatchValue(value="maintenance_marker")
+                        )
+                    ],
                 ),
                 limit=10,
-                score_threshold=0.2,   # permissive; real filtering is the re-rank
+                score_threshold=0.2,  # permissive; real filtering is the re-rank
             ).points
         except Exception:
-            return []   # collection missing / qdrant down → just no memories
+            return []  # collection missing / qdrant down → just no memories
 
-        scored = sorted(hits, key=lambda p: self._memory_strength(p.payload, p.score), reverse=True)
+        scored = sorted(
+            hits, key=lambda p: self._memory_strength(p.payload, p.score), reverse=True
+        )
         top = scored[: self._cfg.memory_top_k]
 
         # MemoryBank-style reinforcement: recalled memories decay slower.
@@ -207,8 +225,10 @@ class RAGHandle:
             try:
                 self._qdrant.set_payload(
                     collection_name=self._cfg.memory_collection,
-                    payload={"last_accessed": now,
-                             "access_count": p.payload.get("access_count", 0) + 1},
+                    payload={
+                        "last_accessed": now,
+                        "access_count": p.payload.get("access_count", 0) + 1,
+                    },
                     points=[p.id],
                 )
             except Exception:
@@ -229,12 +249,20 @@ class RAGHandle:
         )
         try:
             raw = await self._llm_complete("You are a memory summarizer.", prompt)
-            cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            cleaned = (
+                raw.strip()
+                .removeprefix("```json")
+                .removeprefix("```")
+                .removesuffix("```")
+                .strip()
+            )
             data = json.loads(cleaned)
             summary = str(data["summary"])
             importance = max(1, min(int(data["importance"]), 10))
         except Exception:
-            print(f"[RAG] memory summarization failed, storing raw tail:\n{traceback.format_exc()}")
+            print(
+                f"[RAG] memory summarization failed, storing raw tail:\n{traceback.format_exc()}"
+            )
             summary, importance = transcript[-500:], 3
 
         if importance <= 1:
@@ -246,20 +274,33 @@ class RAGHandle:
         now = datetime.now().isoformat()
         self._qdrant.upsert(
             collection_name=self._cfg.memory_collection,
-            points=[PointStruct(id=str(uuid.uuid4()), vector=vector, payload={
-                "text": summary, "_user_id": _user_id, "type": "conversation",
-                "created_at": now, "last_accessed": now,
-                "access_count": 0, "importance": importance,
-            })],
+            points=[
+                PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vector,
+                    payload={
+                        "text": summary,
+                        "_user_id": _user_id,
+                        "type": "conversation",
+                        "created_at": now,
+                        "last_accessed": now,
+                        "access_count": 0,
+                        "importance": importance,
+                    },
+                )
+            ],
         )
-        print(f"[RAG] Saved conversation memory (importance={importance}): {summary[:80]}...")
-
+        print(
+            f"[RAG] Saved conversation memory (importance={importance}): {summary[:80]}..."
+        )
 
     def _last_maintenance(self) -> datetime | None:
         try:
             pts = self._qdrant.retrieve(
                 collection_name=self._cfg.memory_collection,
-                ids=[self._MAINTENANCE_MARKER_ID], with_payload=True, with_vectors=False,
+                ids=[self._MAINTENANCE_MARKER_ID],
+                with_payload=True,
+                with_vectors=False,
             )
             if pts:
                 return datetime.fromisoformat(pts[0].payload["last_run"])
@@ -272,23 +313,30 @@ class RAGHandle:
         # retrieval automatically (zero vector never scores) but be explicit anyway.
         self._qdrant.upsert(
             collection_name=self._cfg.memory_collection,
-            points=[PointStruct(
-                id=self._MAINTENANCE_MARKER_ID,
-                vector=[0.0] * vector_size,
-                payload={"type": "maintenance_marker",
-                         "last_run": datetime.now().isoformat()},
-            )],
+            points=[
+                PointStruct(
+                    id=self._MAINTENANCE_MARKER_ID,
+                    vector=[0.0] * vector_size,
+                    payload={
+                        "type": "maintenance_marker",
+                        "last_run": datetime.now().isoformat(),
+                    },
+                )
+            ],
         )
 
     async def _maintenance_loop(self) -> None:
         import asyncio
+
         check_secs = self._cfg.memory_maintenance_check_hours * 3600
         while True:
             try:
                 last = self._last_maintenance()
-                due = (last is None or
-                       (datetime.now() - last).total_seconds()
-                       >= self._cfg.memory_maintenance_days * 86400)
+                due = (
+                    last is None
+                    or (datetime.now() - last).total_seconds()
+                    >= self._cfg.memory_maintenance_days * 86400
+                )
                 if due:
                     print("[RAG] Running memory maintenance...")
                     await self._run_maintenance()
@@ -299,6 +347,7 @@ class RAGHandle:
     async def _run_maintenance(self) -> None:
         """Decay-based pruning + consolidation. Same logic as memory_maintenance.py."""
         from collections import defaultdict
+
         DELETE_BELOW, CONSOLIDATE_BELOW = 0.05, 0.30
 
         # scroll everything
@@ -306,20 +355,26 @@ class RAGHandle:
         try:
             while True:
                 batch, offset = self._qdrant.scroll(
-                    collection_name=self._cfg.memory_collection, limit=200,
-                    offset=offset, with_payload=True, with_vectors=False)
+                    collection_name=self._cfg.memory_collection,
+                    limit=200,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
                 points.extend(batch)
                 if offset is None:
                     break
         except Exception:
-            return   # collection doesn't exist yet — nothing to do
+            return  # collection doesn't exist yet — nothing to do
 
         def base_strength(payload: dict) -> float:
             # query-independent: recency * importance
             imp = payload.get("importance", 3)
             half = max(self._cfg.memory_half_life_days * (imp / 5.0), 0.5)
             try:
-                last = datetime.fromisoformat(payload.get("last_accessed") or payload["created_at"])
+                last = datetime.fromisoformat(
+                    payload.get("last_accessed") or payload["created_at"]
+                )
                 age = (datetime.now() - last).total_seconds() / 86400.0
             except Exception:
                 age = 0.0
@@ -340,31 +395,47 @@ class RAGHandle:
             if len(weak) < 3:
                 continue
             texts = [p.payload["text"] for p in weak]
-            merged = (await self._llm_complete(
-                "You are a memory consolidator.",
-                "These are old memories about conversations with the same person. "
-                "Merge them into a single 3-5 sentence memory keeping only durable "
-                "facts, preferences and recurring themes. Drop one-off small talk.\n\n"
-                + "\n---\n".join(texts))).strip()
+            merged = (
+                await self._llm_complete(
+                    "You are a memory consolidator.",
+                    "These are old memories about conversations with the same person. "
+                    "Merge them into a single 3-5 sentence memory keeping only durable "
+                    "facts, preferences and recurring themes. Drop one-off small talk.\n\n"
+                    + "\n---\n".join(texts),
+                )
+            ).strip()
             if not merged:
                 continue
             vec = await self._embed(merged)
             vector_size = len(vec)
             now = datetime.now().isoformat()
             imp = min(max(p.payload.get("importance", 3) for p in weak) + 1, 10)
-            self._qdrant.upsert(collection_name=self._cfg.memory_collection,
-                points=[PointStruct(id=str(uuid.uuid4()), vector=vec, payload={
-                    "text": merged, "_user_id": user,
-                    "type": "conversation_consolidated",
-                    "created_at": now, "last_accessed": now,
-                    "access_count": 0, "importance": imp,
-                })])
+            self._qdrant.upsert(
+                collection_name=self._cfg.memory_collection,
+                points=[
+                    PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=vec,
+                        payload={
+                            "text": merged,
+                            "_user_id": user,
+                            "type": "conversation_consolidated",
+                            "created_at": now,
+                            "last_accessed": now,
+                            "access_count": 0,
+                            "importance": imp,
+                        },
+                    )
+                ],
+            )
             to_delete.extend(weak)
             print(f"[RAG] Consolidated {len(weak)} memories → 1 for user {user}")
 
         if to_delete:
-            self._qdrant.delete(collection_name=self._cfg.memory_collection,
-                points_selector=PointIdsList(points=[p.id for p in to_delete]))
+            self._qdrant.delete(
+                collection_name=self._cfg.memory_collection,
+                points_selector=PointIdsList(points=[p.id for p in to_delete]),
+            )
             print(f"[RAG] Deleted {len(to_delete)} decayed memories")
 
         if vector_size is None:
@@ -391,9 +462,7 @@ class RAGHandle:
                     # SHARED_USER_ID) are retrieved alongside personal ones.
                     should = [
                         FieldCondition(key=k, match=MatchValue(value=v)),
-                        FieldCondition(
-                            key=k, match=MatchValue(value=SHARED_USER_ID)
-                        ),
+                        FieldCondition(key=k, match=MatchValue(value=SHARED_USER_ID)),
                     ]
                 else:
                     must.append(FieldCondition(key=k, match=MatchValue(value=v)))
@@ -453,7 +522,8 @@ class RAGHandle:
             "answers when relevant, but always answer in character. If you have "
             "relevant memories of past conversations, use them naturally. Only if "
             "you genuinely know nothing relevant, improvise in character rather "
-            "than admitting you lack information or breaking character. "        )
+            "than admitting you lack information or breaking character. "
+        )
         system_prompt = " ".join(parts)
 
         memory_block = ""
@@ -466,8 +536,7 @@ class RAGHandle:
 
         if not chunks:
             user_prompt = (
-                memory_block
-                + "No relevant context was found.\n\n"
+                memory_block + "No relevant context was found.\n\n"
                 f"Question: {question}\n\n"
                 "Answer based on your memories above if relevant, otherwise general knowledge."
             )
@@ -481,8 +550,7 @@ class RAGHandle:
                 )
             context_block = "\n\n".join(context_parts)
             user_prompt = (
-                memory_block
-                + f"Context:\n{context_block}\n\n"
+                memory_block + f"Context:\n{context_block}\n\n"
                 f"Question: {question}\n\n"
                 "Answer based on the context and your memories above. "
                 "Don't speak about the sources, just use them to answer."
@@ -718,7 +786,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
 
     def update_preferences(self, new_preferences: dict):
         self.preferences.update(new_preferences)
-    
+
     async def finalize(self) -> None:
         """Called when the session ends — persist this conversation as a memory."""
         if not self.history:

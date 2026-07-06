@@ -35,7 +35,10 @@ class EMO(Module):
     ):
         super().__init__()
 
-        from transformers import AutoModelForAudioClassification, Wav2Vec2FeatureExtractor
+        from transformers import (
+            AutoModelForAudioClassification,
+            Wav2Vec2FeatureExtractor,
+        )
 
         self.model = AutoModelForAudioClassification.from_pretrained(model_name)
         self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)

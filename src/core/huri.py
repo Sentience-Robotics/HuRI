@@ -137,5 +137,8 @@ class HuRI:
                     await fin()
                 except Exception:
                     import traceback
-                    print(f"[HuRI] finalize failed for {type(module).__name__}:\n{traceback.format_exc()}")
+
+                    print(
+                        f"[HuRI] finalize failed for {type(module).__name__}:\n{traceback.format_exc()}"
+                    )
             self.clients.pop(session_id, None)

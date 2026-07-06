@@ -4,6 +4,7 @@ Usage:
     python -m src.modules.rag.memory.memory_inspect
     python -m src.modules.rag.memory.memory_inspect --user-id <id>
 """
+
 import argparse
 from datetime import datetime, timedelta
 
@@ -22,7 +23,9 @@ def strength(payload: dict, at: datetime | None = None) -> float:
     imp = payload.get("importance", 3)
     half = max(HALF_LIFE_DAYS * (imp / 5.0), 0.5)
     try:
-        last = datetime.fromisoformat(payload.get("last_accessed") or payload["created_at"])
+        last = datetime.fromisoformat(
+            payload.get("last_accessed") or payload["created_at"]
+        )
         age = (at - last).total_seconds() / 86400.0
     except Exception:
         age = 0.0
@@ -47,8 +50,13 @@ def main():
     qdrant = make_qdrant_client(args.qdrant_url)
     points, offset = [], None
     while True:
-        batch, offset = qdrant.scroll(collection_name=args.collection, limit=200,
-                                      offset=offset, with_payload=True, with_vectors=False)
+        batch, offset = qdrant.scroll(
+            collection_name=args.collection,
+            limit=200,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
         points.extend(batch)
         if offset is None:
             break
@@ -63,26 +71,38 @@ def main():
         if args.user_id and pl.get("_user_id") != args.user_id:
             continue
         s_now = strength(pl, now)
-        rows.append({
-            "text": pl.get("text", "")[:60].replace("\n", " "),
-            "type": pl.get("type", "?"),
-            "imp": pl.get("importance", "?"),
-            "acc": pl.get("access_count", 0),
-            "age_d": round((now - datetime.fromisoformat(
-                pl.get("last_accessed") or pl["created_at"])).total_seconds() / 86400, 1),
-            "now": round(s_now, 3),
-            "+5d": round(strength(pl, now + timedelta(days=5)), 3),
-            "+15d": round(strength(pl, now + timedelta(days=15)), 3),
-            "fate": fate(s_now),
-        })
+        rows.append(
+            {
+                "text": pl.get("text", "")[:60].replace("\n", " "),
+                "type": pl.get("type", "?"),
+                "imp": pl.get("importance", "?"),
+                "acc": pl.get("access_count", 0),
+                "age_d": round(
+                    (
+                        now
+                        - datetime.fromisoformat(
+                            pl.get("last_accessed") or pl["created_at"]
+                        )
+                    ).total_seconds()
+                    / 86400,
+                    1,
+                ),
+                "now": round(s_now, 3),
+                "+5d": round(strength(pl, now + timedelta(days=5)), 3),
+                "+15d": round(strength(pl, now + timedelta(days=15)), 3),
+                "fate": fate(s_now),
+            }
+        )
 
     rows.sort(key=lambda r: r["now"], reverse=True)
     hdr = f"{'strength':>8} {'+5d':>6} {'+15d':>6} {'imp':>3} {'acc':>3} {'age':>5} {'fate':<12} text"
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
-        print(f"{r['now']:>8} {r['+5d']:>6} {r['+15d']:>6} {r['imp']:>3} "
-              f"{r['acc']:>3} {r['age_d']:>5} {r['fate']:<12} {r['text']}")
+        print(
+            f"{r['now']:>8} {r['+5d']:>6} {r['+15d']:>6} {r['imp']:>3} "
+            f"{r['acc']:>3} {r['age_d']:>5} {r['fate']:<12} {r['text']}"
+        )
     print(f"\n{len(rows)} memories")
 
 

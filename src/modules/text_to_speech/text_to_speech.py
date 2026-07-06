@@ -106,10 +106,15 @@ class TTSDeployment:
         # (~minutes) and needs validation per GPU arch. OFF by default; flip
         # HURI_TTS_TRT=1 to experiment once fp16 is confirmed working.
         load_trt = os.environ.get("HURI_TTS_TRT", "").strip().lower() in (
-            "1", "true", "yes", "on"
+            "1",
+            "true",
+            "yes",
+            "on",
         )
 
-        print(f"[TTS] loading CosyVoice3 (fp16={fp16}, load_trt={load_trt}) from {model_path!r}")
+        print(
+            f"[TTS] loading CosyVoice3 (fp16={fp16}, load_trt={load_trt}) from {model_path!r}"
+        )
         self.model = CosyVoice3(model_dir=model_path, load_trt=load_trt, fp16=fp16)
         self.sample_rate: int = self.model.sample_rate
 

@@ -42,7 +42,7 @@ class RAGQuestion(EventData):
         if "text" in data:
             return cls(Transcript(text=data["text"], end=True), None)
 
-        # Thomas: it's nasty, but ragquestion is a subclass and doesn't work well with 
+        # Thomas: it's nasty, but ragquestion is a subclass and doesn't work well with
         # ray for my end, i get  RAGQuestion.__init__() got an unexpected keyword argument 'text'
         # if there is a agnostic way, we can fix this, but until now it's like this
 

@@ -6,6 +6,7 @@ Strong memories are kept, weak ones are merged into a consolidated memory,
 dead ones are deleted. Decay itself is computed lazily at query time in
 rag.py; this job only prunes and compresses.
 """
+
 import argparse
 import json
 import uuid
@@ -30,7 +31,9 @@ def strength(payload: dict) -> float:
     importance = payload.get("importance", 3)
     half_life = max(HALF_LIFE_DAYS * (importance / 5.0), 0.5)
     try:
-        last = datetime.fromisoformat(payload.get("last_accessed") or payload["created_at"])
+        last = datetime.fromisoformat(
+            payload.get("last_accessed") or payload["created_at"]
+        )
         age_days = (datetime.now() - last).total_seconds() / 86400.0
     except Exception:
         age_days = 0.0
@@ -45,11 +48,15 @@ def embed(client: httpx.Client, url: str, model: str, text: str) -> list[float]:
 
 
 def llm(client: httpx.Client, url: str, model: str, prompt: str) -> str:
-    r = client.post(f"{url}/api/chat", json={
-        "model": model, "stream": False,
-        "messages": [{"role": "user", "content": prompt}],
-        "options": {"num_predict": 300},
-    })
+    r = client.post(
+        f"{url}/api/chat",
+        json={
+            "model": model,
+            "stream": False,
+            "messages": [{"role": "user", "content": prompt}],
+            "options": {"num_predict": 300},
+        },
+    )
     r.raise_for_status()
     return r.json()["message"]["content"]
 
@@ -69,8 +76,13 @@ def main():
 
     points, offset = [], None
     while True:
-        batch, offset = qdrant.scroll(collection_name=args.collection, limit=200,
-                                      offset=offset, with_payload=True, with_vectors=False)
+        batch, offset = qdrant.scroll(
+            collection_name=args.collection,
+            limit=200,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
         points.extend(batch)
         if offset is None:
             break
@@ -83,7 +95,9 @@ def main():
             to_delete.append(p)
         elif s < CONSOLIDATE_BELOW:
             weak_by_user[p.payload.get("_user_id", "anonymous")].append(p)
-    print(f"delete: {len(to_delete)}, consolidate candidates: {sum(map(len, weak_by_user.values()))}")
+    print(
+        f"delete: {len(to_delete)}, consolidate candidates: {sum(map(len, weak_by_user.values()))}"
+    )
 
     if args.dry_run:
         return
@@ -92,26 +106,44 @@ def main():
         if len(weak) < 3:
             continue  # not worth merging yet; keep decaying
         texts = [p.payload["text"] for p in weak]
-        merged = llm(http, args.ollama_url, args.llm_model,
-                     "These are old memories about conversations with the same person. "
-                     "Merge them into a single 3-5 sentence memory keeping only durable "
-                     "facts, preferences and recurring themes. Drop one-off small talk.\n\n"
-                     + "\n---\n".join(texts)).strip()
+        merged = llm(
+            http,
+            args.ollama_url,
+            args.llm_model,
+            "These are old memories about conversations with the same person. "
+            "Merge them into a single 3-5 sentence memory keeping only durable "
+            "facts, preferences and recurring themes. Drop one-off small talk.\n\n"
+            + "\n---\n".join(texts),
+        ).strip()
         vec = embed(http, args.ollama_url, args.embedding_model, merged)
         now = datetime.now().isoformat()
         imp = min(max(p.payload.get("importance", 3) for p in weak) + 1, 10)
-        qdrant.upsert(collection_name=args.collection, points=[PointStruct(
-            id=str(uuid.uuid4()), vector=vec, payload={
-                "text": merged, "_user_id": user, "type": "conversation_consolidated",
-                "created_at": now, "last_accessed": now, "access_count": 0,
-                "importance": imp,
-            })])
+        qdrant.upsert(
+            collection_name=args.collection,
+            points=[
+                PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vec,
+                    payload={
+                        "text": merged,
+                        "_user_id": user,
+                        "type": "conversation_consolidated",
+                        "created_at": now,
+                        "last_accessed": now,
+                        "access_count": 0,
+                        "importance": imp,
+                    },
+                )
+            ],
+        )
         to_delete.extend(weak)
         print(f"[{user}] consolidated {len(weak)} → 1 (importance={imp})")
 
     if to_delete:
-        qdrant.delete(collection_name=args.collection,
-                      points_selector=PointIdsList(points=[p.id for p in to_delete]))
+        qdrant.delete(
+            collection_name=args.collection,
+            points_selector=PointIdsList(points=[p.id for p in to_delete]),
+        )
         print(f"deleted {len(to_delete)} points")
 
 
