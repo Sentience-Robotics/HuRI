@@ -14,13 +14,9 @@ from .processing import (
     VQEncoderV5,
     VQEncoderV6,
     WavEncoder,
-    axis_angle_to_matrix,
     axis_angle_to_rotation_6d,
-    matrix_to_axis_angle,
-    matrix_to_rotation_6d,
     recover_from_mask_ts,
     rotation_6d_to_axis_angle,
-    rotation_6d_to_matrix,
     velocity2position,
 )
 

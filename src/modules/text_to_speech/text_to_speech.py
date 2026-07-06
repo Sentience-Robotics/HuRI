@@ -113,7 +113,8 @@ class TTSDeployment:
         )
 
         print(
-            f"[TTS] loading CosyVoice3 (fp16={fp16}, load_trt={load_trt}) from {model_path!r}"
+            f"[TTS] loading CosyVoice3 (fp16={fp16}, load_trt={load_trt}) "
+            f"from {model_path!r}"
         )
         self.model = CosyVoice3(model_dir=model_path, load_trt=load_trt, fp16=fp16)
         self.sample_rate: int = self.model.sample_rate
@@ -247,7 +248,9 @@ class TTS(ModuleWithHandle):
         # and silently drop trailing words).
         self._push_lock = asyncio.Lock()
 
-    async def process(self, token: Token) -> AsyncGenerator[Audio, None]:  # type: ignore[override]
+    async def process(  # type: ignore[override]
+        self, token: Token
+    ) -> AsyncGenerator[Audio, None]:
         # Acquire BEFORE any await so lock-acquisition order matches token order.
         # Setup + push happen under the lock; only the first token of an
         # utterance goes on to drain/yield audio (outside the lock, so pushes of
@@ -302,7 +305,7 @@ class TTS(ModuleWithHandle):
             response = self._handle.options(stream=True).stream_audio.remote(session_id)
             count = 0
             pts = 0.0
-            async for audio in response:  # type: ignore[attr-defined]
+            async for audio in response:  # type: ignore[union-attr]
                 count += 1
                 audio.pts = pts
                 pts += audio.data.shape[0] / audio.sample_rate

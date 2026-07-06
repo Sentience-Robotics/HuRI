@@ -20,7 +20,8 @@ class Sender(Module):
     This data must be JSON serialisable, like a dataclass.
     Audio wire format:  [4B sample_rate uint32][1B end][8B pts float64][float32 PCM].
     Motion wire format: [8B pts float64][4B fps uint32][4B n_frames uint32]
-                        [poses float32 n*165][expressions float32 n*100][trans float32 n*3].
+                        [poses float32 n*165][expressions float32 n*100]
+                        [trans float32 n*3].
 
     input: auto, output: None"""
 

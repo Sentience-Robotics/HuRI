@@ -9,7 +9,13 @@ from typing import Any, AsyncGenerator
 
 import httpx
 from pydantic import BaseModel
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointIdsList,
+    PointStruct,
+)
 from ray import serve
 from ray.serve import handle
 
@@ -80,6 +86,7 @@ class RAGHandle:
     _MAINTENANCE_MARKER_ID = "00000000-0000-0000-0000-00000000feed"
 
     def __init__(self, **kwargs):
+        self._maintenance_task: asyncio.Task | None = None
         self._cfg = RAGDeploymentConfig(**kwargs)
         self._apply_config()
 
@@ -94,7 +101,8 @@ class RAGHandle:
         print(f"[RAGHandle] Connected to Qdrant at {cfg.qdrant_url}")
         self._embed_client = httpx.AsyncClient(timeout=30.0, verify=cfg.verify_ssl)
         self._llm_client = httpx.AsyncClient(timeout=120.0, verify=cfg.verify_ssl)
-        if not hasattr(self, "_maintenance_task") or self._maintenance_task.done():
+        task = self._maintenance_task
+        if task is None or task.done():
             self._maintenance_task = asyncio.get_event_loop().create_task(
                 self._maintenance_loop()
             )
@@ -121,7 +129,8 @@ class RAGHandle:
                 f"Embedding non-JSON response from {url}: {resp.text[:1000]}"
             ) from e
         try:
-            return payload["data"][0]["embedding"]
+            embedding: list[float] = payload["data"][0]["embedding"]
+            return embedding
         except (KeyError, IndexError, TypeError) as e:
             raise RuntimeError(
                 f"Embedding unexpected schema from {url}: {str(payload)[:1000]}"
@@ -151,7 +160,7 @@ class RAGHandle:
             )
         except Exception:
             return []
-        return [p.payload.get("text", "") for p in points if p.payload.get("text")]
+        return [t for p in points if (t := (p.payload or {}).get("text", ""))]
 
     def _ensure_memory_collection(self, vector_size: int) -> None:
         from qdrant_client.models import Distance, VectorParams
@@ -175,7 +184,7 @@ class RAGHandle:
         return "".join(parts)
 
     def _memory_strength(self, payload: dict, relevance: float) -> float:
-        importance = payload.get("importance", 3)
+        importance: int = payload.get("importance", 3)
         half_life = max(self._cfg.memory_half_life_days * (importance / 5.0), 0.5)
         try:
             last = datetime.fromisoformat(
@@ -184,7 +193,7 @@ class RAGHandle:
             age_days = (datetime.now() - last).total_seconds() / 86400.0
         except Exception:
             age_days = 0.0
-        recency = 0.5 ** (age_days / half_life)
+        recency: float = 0.5 ** (age_days / half_life)
         cfg = self._cfg
         return (
             cfg.memory_w_relevance * relevance
@@ -215,7 +224,9 @@ class RAGHandle:
             return []  # collection missing / qdrant down → just no memories
 
         scored = sorted(
-            hits, key=lambda p: self._memory_strength(p.payload, p.score), reverse=True
+            hits,
+            key=lambda p: self._memory_strength(p.payload or {}, p.score),
+            reverse=True,
         )
         top = scored[: self._cfg.memory_top_k]
 
@@ -227,13 +238,13 @@ class RAGHandle:
                     collection_name=self._cfg.memory_collection,
                     payload={
                         "last_accessed": now,
-                        "access_count": p.payload.get("access_count", 0) + 1,
+                        "access_count": (p.payload or {}).get("access_count", 0) + 1,
                     },
                     points=[p.id],
                 )
             except Exception:
                 pass
-        return [p.payload.get("text", "") for p in top if p.payload.get("text")]
+        return [t for p in top if (t := (p.payload or {}).get("text", ""))]
 
     async def save_conversation(self, _user_id: str, history: list) -> None:
         """Summarize a finished session into one memory point. Called at disconnect."""
@@ -261,7 +272,8 @@ class RAGHandle:
             importance = max(1, min(int(data["importance"]), 10))
         except Exception:
             print(
-                f"[RAG] memory summarization failed, storing raw tail:\n{traceback.format_exc()}"
+                "[RAG] memory summarization failed, storing raw tail:\n"
+                f"{traceback.format_exc()}"
             )
             summary, importance = transcript[-500:], 3
 
@@ -291,7 +303,8 @@ class RAGHandle:
             ],
         )
         print(
-            f"[RAG] Saved conversation memory (importance={importance}): {summary[:80]}..."
+            f"[RAG] Saved conversation memory (importance={importance}): "
+            f"{summary[:80]}..."
         )
 
     def _last_maintenance(self) -> datetime | None:
@@ -303,7 +316,8 @@ class RAGHandle:
                 with_vectors=False,
             )
             if pts:
-                return datetime.fromisoformat(pts[0].payload["last_run"])
+                payload = pts[0].payload or {}
+                return datetime.fromisoformat(payload["last_run"])
         except Exception:
             pass
         return None
@@ -369,7 +383,7 @@ class RAGHandle:
 
         def base_strength(payload: dict) -> float:
             # query-independent: recency * importance
-            imp = payload.get("importance", 3)
+            imp: int = payload.get("importance", 3)
             half = max(self._cfg.memory_half_life_days * (imp / 5.0), 0.5)
             try:
                 last = datetime.fromisoformat(
@@ -378,29 +392,32 @@ class RAGHandle:
                 age = (datetime.now() - last).total_seconds() / 86400.0
             except Exception:
                 age = 0.0
-            return (0.5 ** (age / half)) * (imp / 10.0)
+            recency: float = 0.5 ** (age / half)
+            return recency * (imp / 10.0)
 
         to_delete, weak_by_user = [], defaultdict(list)
         vector_size = None
         for p in points:
-            if p.payload.get("type") == "maintenance_marker":
+            payload = p.payload or {}
+            if payload.get("type") == "maintenance_marker":
                 continue
-            s = base_strength(p.payload)
+            s = base_strength(payload)
             if s < DELETE_BELOW:
                 to_delete.append(p)
             elif s < CONSOLIDATE_BELOW:
-                weak_by_user[p.payload.get("_user_id", "anonymous")].append(p)
+                weak_by_user[payload.get("_user_id", "anonymous")].append(p)
 
         for user, weak in weak_by_user.items():
             if len(weak) < 3:
                 continue
-            texts = [p.payload["text"] for p in weak]
+            texts = [(p.payload or {})["text"] for p in weak]
             merged = (
                 await self._llm_complete(
                     "You are a memory consolidator.",
-                    "These are old memories about conversations with the same person. "
-                    "Merge them into a single 3-5 sentence memory keeping only durable "
-                    "facts, preferences and recurring themes. Drop one-off small talk.\n\n"
+                    "These are old memories about conversations with the "
+                    "same person. Merge them into a single 3-5 sentence "
+                    "memory keeping only durable facts, preferences and "
+                    "recurring themes. Drop one-off small talk.\n\n"
                     + "\n---\n".join(texts),
                 )
             ).strip()
@@ -409,7 +426,9 @@ class RAGHandle:
             vec = await self._embed(merged)
             vector_size = len(vec)
             now = datetime.now().isoformat()
-            imp = min(max(p.payload.get("importance", 3) for p in weak) + 1, 10)
+            imp = min(
+                max((p.payload or {}).get("importance", 3) for p in weak) + 1, 10
+            )
             self._qdrant.upsert(
                 collection_name=self._cfg.memory_collection,
                 points=[
@@ -538,7 +557,8 @@ class RAGHandle:
             user_prompt = (
                 memory_block + "No relevant context was found.\n\n"
                 f"Question: {question}\n\n"
-                "Answer based on your memories above if relevant, otherwise general knowledge."
+                "Answer based on your memories above if relevant, otherwise "
+                "general knowledge."
             )
         else:
             context_parts = []
@@ -729,7 +749,10 @@ class RAG(ModuleWithHandle, ModuleWithId):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
 
         print(
-            f"[RAG] Initialized with user_id={_user_id}, language={language}, tone={tone}, response_format={response_format}, max_length={max_length}, temperature={temperature}, max_history_turns={max_history_turns}"
+            f"[RAG] Initialized with user_id={_user_id}, language={language}, "
+            f"tone={tone}, response_format={response_format}, "
+            f"max_length={max_length}, temperature={temperature}, "
+            f"max_history_turns={max_history_turns}"
         )
 
         self.preferences = {
@@ -749,7 +772,9 @@ class RAG(ModuleWithHandle, ModuleWithId):
         self._max_history_turns = max_history_turns
         self.history: list[dict] = []
 
-    async def process(self, data: RAGQuestion) -> AsyncGenerator[Token, None]:  # type: ignore[override]
+    async def process(  # type: ignore[override]
+        self, data: RAGQuestion
+    ) -> AsyncGenerator[Token, None]:
         """
         Called when a "question" event arrives through the event bus.
         Packages _user_id + question, sends to the stateless RAGHandle.
@@ -765,7 +790,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
 
         parts: list[str] = []
         stream = self._handle.options(stream=True).stream.remote(query)
-        async for delta in stream:
+        async for delta in stream:  # type: ignore[union-attr]
             parts.append(delta)
             yield Token(text=delta, end=False)
         yield Token(text="", end=True)

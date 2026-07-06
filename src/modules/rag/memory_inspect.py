@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 try:
     from .qdrant_utils import make_qdrant_client
 except ImportError:
-    from qdrant_utils import make_qdrant_client
+    from qdrant_utils import make_qdrant_client  # type: ignore[no-redef]
 
 HALF_LIFE_DAYS = 5.0
 DELETE_BELOW, CONSOLIDATE_BELOW = 0.05, 0.30
@@ -20,7 +20,7 @@ DELETE_BELOW, CONSOLIDATE_BELOW = 0.05, 0.30
 def strength(payload: dict, at: datetime | None = None) -> float:
     """Query-independent strength: recency * importance (matches maintenance)."""
     at = at or datetime.now()
-    imp = payload.get("importance", 3)
+    imp: int = payload.get("importance", 3)
     half = max(HALF_LIFE_DAYS * (imp / 5.0), 0.5)
     try:
         last = datetime.fromisoformat(
@@ -29,7 +29,8 @@ def strength(payload: dict, at: datetime | None = None) -> float:
         age = (at - last).total_seconds() / 86400.0
     except Exception:
         age = 0.0
-    return (0.5 ** (max(age, 0) / half)) * (imp / 10.0)
+    recency: float = 0.5 ** (max(age, 0) / half)
+    return recency * (imp / 10.0)
 
 
 def fate(s: float) -> str:
@@ -64,7 +65,7 @@ def main():
     now = datetime.now()
     rows = []
     for p in points:
-        pl = p.payload
+        pl = p.payload or {}
         if pl.get("type") == "maintenance_marker":
             print(f"[marker] last maintenance run: {pl.get('last_run')}\n")
             continue
@@ -95,7 +96,10 @@ def main():
         )
 
     rows.sort(key=lambda r: r["now"], reverse=True)
-    hdr = f"{'strength':>8} {'+5d':>6} {'+15d':>6} {'imp':>3} {'acc':>3} {'age':>5} {'fate':<12} text"
+    hdr = (
+        f"{'strength':>8} {'+5d':>6} {'+15d':>6} {'imp':>3} {'acc':>3} "
+        f"{'age':>5} {'fate':<12} text"
+    )
     print(hdr)
     print("-" * len(hdr))
     for r in rows:

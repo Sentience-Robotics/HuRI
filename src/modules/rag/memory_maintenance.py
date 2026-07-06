@@ -8,18 +8,17 @@ rag.py; this job only prunes and compresses.
 """
 
 import argparse
-import json
 import uuid
 from collections import defaultdict
 from datetime import datetime
 
 import httpx
-from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
+from qdrant_client.models import PointIdsList, PointStruct
 
 try:
     from .qdrant_utils import make_qdrant_client
 except ImportError:
-    from qdrant_utils import make_qdrant_client
+    from qdrant_utils import make_qdrant_client  # type: ignore[no-redef]
 
 DELETE_BELOW = 0.05
 CONSOLIDATE_BELOW = 0.30
@@ -28,7 +27,7 @@ HALF_LIFE_DAYS = 5.0
 
 def strength(payload: dict) -> float:
     """Query-independent strength: recency * importance (no relevance term)."""
-    importance = payload.get("importance", 3)
+    importance: int = payload.get("importance", 3)
     half_life = max(HALF_LIFE_DAYS * (importance / 5.0), 0.5)
     try:
         last = datetime.fromisoformat(
@@ -37,14 +36,15 @@ def strength(payload: dict) -> float:
         age_days = (datetime.now() - last).total_seconds() / 86400.0
     except Exception:
         age_days = 0.0
-    recency = 0.5 ** (age_days / half_life)
+    recency: float = 0.5 ** (age_days / half_life)
     return recency * (importance / 10.0)
 
 
 def embed(client: httpx.Client, url: str, model: str, text: str) -> list[float]:
     r = client.post(f"{url}/v1/embeddings", json={"model": model, "input": text})
     r.raise_for_status()
-    return r.json()["data"][0]["embedding"]
+    embedding: list[float] = r.json()["data"][0]["embedding"]
+    return embedding
 
 
 def llm(client: httpx.Client, url: str, model: str, prompt: str) -> str:
@@ -58,7 +58,8 @@ def llm(client: httpx.Client, url: str, model: str, prompt: str) -> str:
         },
     )
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    content: str = r.json()["message"]["content"]
+    return content
 
 
 def main():
@@ -90,13 +91,15 @@ def main():
 
     to_delete, weak_by_user = [], defaultdict(list)
     for p in points:
-        s = strength(p.payload)
+        payload = p.payload or {}
+        s = strength(payload)
         if s < DELETE_BELOW:
             to_delete.append(p)
         elif s < CONSOLIDATE_BELOW:
-            weak_by_user[p.payload.get("_user_id", "anonymous")].append(p)
+            weak_by_user[payload.get("_user_id", "anonymous")].append(p)
     print(
-        f"delete: {len(to_delete)}, consolidate candidates: {sum(map(len, weak_by_user.values()))}"
+        f"delete: {len(to_delete)}, "
+        f"consolidate candidates: {sum(map(len, weak_by_user.values()))}"
     )
 
     if args.dry_run:
@@ -105,7 +108,7 @@ def main():
     for user, weak in weak_by_user.items():
         if len(weak) < 3:
             continue  # not worth merging yet; keep decaying
-        texts = [p.payload["text"] for p in weak]
+        texts = [(p.payload or {})["text"] for p in weak]
         merged = llm(
             http,
             args.ollama_url,
@@ -117,7 +120,7 @@ def main():
         ).strip()
         vec = embed(http, args.ollama_url, args.embedding_model, merged)
         now = datetime.now().isoformat()
-        imp = min(max(p.payload.get("importance", 3) for p in weak) + 1, 10)
+        imp = min(max((p.payload or {}).get("importance", 3) for p in weak) + 1, 10)
         qdrant.upsert(
             collection_name=args.collection,
             points=[

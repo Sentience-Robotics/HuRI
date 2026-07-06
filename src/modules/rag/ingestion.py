@@ -185,7 +185,8 @@ def ingest_chunks(
 def chunk_strat(text: str, args, model: Any) -> list[str] | Any:
     """Pick the right chunking strategy based on args."""
     if args.chunking == "semantic":
-        # Thomas: I need to import here, bceause it takes too much time earlier, or use a jupyter notebook to do it instead
+        # Thomas: I need to import here, bceause it takes too much time earlier, or
+        # use a jupyter notebook to do it instead
         from .semantic_chunker import SemanticChunker
 
         chunker = SemanticChunker(
@@ -517,7 +518,7 @@ def main():
     try:
         from .qdrant_utils import make_qdrant_client
     except ImportError:
-        from qdrant_utils import make_qdrant_client
+        from qdrant_utils import make_qdrant_client  # type: ignore[no-redef]
     client = make_qdrant_client(args.qdrant_url, verify_ssl)
 
     # Lazy-load the model only if the command needs embeddings.
@@ -527,7 +528,8 @@ def main():
     if needs_embeddings:
         if args.embedding_url:
             print(
-                f"Embedding remotely via {args.embedding_url} (model={args.embedding_model})"
+                f"Embedding remotely via {args.embedding_url} "
+                f"(model={args.embedding_model})"
             )
             model = RemoteEmbedder(args.embedding_url, args.embedding_model)
         else:

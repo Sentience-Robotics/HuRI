@@ -1,4 +1,5 @@
 import math
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -132,7 +133,7 @@ def recover_from_mask_ts(selected_motion: torch.Tensor, mask: list) -> torch.Ten
     dtype = selected_motion.dtype
     mask_arr = torch.tensor(mask, dtype=torch.bool, device=device)
     j = len(mask_arr)
-    sum_mask = mask_arr.sum().item()
+    sum_mask = int(mask_arr.sum().item())
     c_channels = selected_motion.shape[-1] // sum_mask
     new_shape = selected_motion.shape[:-1] + (sum_mask, c_channels)
     selected_motion = selected_motion.reshape(new_shape)
@@ -270,7 +271,7 @@ class VQDecoderV5(nn.Module):
         input_size = args.vae_length
         n_resblk = 2
         if input_size == channels[0]:
-            layers = []
+            layers: list[nn.Module] = []
         else:
             layers = [nn.Conv1d(input_size, channels[0], 3, 1, 1)]
         for i in range(n_resblk):
@@ -326,7 +327,7 @@ class BasicBlock(nn.Module):
         self.bn2 = norm_layer(planes)
         self.act2 = act_layer(inplace=True)
         if downsample is not None:
-            self.downsample = nn.Sequential(
+            self.downsample: Optional[nn.Sequential] = nn.Sequential(
                 nn.Conv1d(
                     inplanes,
                     planes,
@@ -401,6 +402,7 @@ class PeriodicPositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, period=15, max_seq_len=60):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
+        self.pe: torch.Tensor
         pe = torch.zeros(period, d_model)
         position = torch.arange(0, period, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(

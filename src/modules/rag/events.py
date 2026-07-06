@@ -43,12 +43,17 @@ class RAGQuestion(EventData):
             return cls(Transcript(text=data["text"], end=True), None)
 
         # Thomas: it's nasty, but ragquestion is a subclass and doesn't work well with
-        # ray for my end, i get  RAGQuestion.__init__() got an unexpected keyword argument 'text'
-        # if there is a agnostic way, we can fix this, but until now it's like this
+        # ray for my end, i get RAGQuestion.__init__() got an unexpected keyword
+        # argument 'text' if there is a agnostic way, we can fix this, but until now
+        # it's like this
 
         transcript = data.get("transcript")
         if isinstance(transcript, Mapping):
             transcript = Transcript(**transcript)
+        if not isinstance(transcript, Transcript):
+            raise ValueError(
+                "RAGQuestion.from_wire needs a 'text' or 'transcript' field"
+            )
         emotion = data.get("emotion")
         if isinstance(emotion, Mapping):
             emotion = Emotion(**emotion)
