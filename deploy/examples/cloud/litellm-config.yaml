@@ -1,17 +1,21 @@
 # LiteLLM proxy config (rendered by templatefile() from litellm.tf).
 #
 # Exposes one OpenAI-compatible model alias, "huri-fast", that forwards to
-# Google Gemini. The RAGHandle calls {llm_url}/v1/chat/completions with
-# model="huri-fast" (llm_provider: vllm), and LiteLLM translates to Gemini.
+# Mistral's OpenAI-compatible API. The RAGHandle calls
+# {llm_url}/v1/chat/completions with model="huri-fast" (llm_provider: vllm),
+# and LiteLLM proxies to Mistral.
 #
-# The Gemini API key is injected via the GEMINI_API_KEY env var (from the
+# The Mistral API key is injected via the MISTRAL_API_KEY env var (from the
 # litellm-secrets Kubernetes Secret) — never stored in this file or in git.
 
 model_list:
   - model_name: huri-fast
     litellm_params:
-      model: gemini/${model}
-      api_key: os.environ/GEMINI_API_KEY
+      # openai/ provider = generic OpenAI-compatible endpoint; api_base points
+      # it at Mistral's /v1 API instead of api.openai.com.
+      model: openai/${model}
+      api_base: https://api.mistral.ai/v1
+      api_key: os.environ/MISTRAL_API_KEY
 
 litellm_settings:
   # Drop params a given model doesn't support instead of erroring, so the
@@ -21,5 +25,5 @@ litellm_settings:
 general_settings:
   # Internal ClusterIP service — no virtual-key auth. Access is restricted at
   # the network layer (ClusterIP, same namespace), so requests need no bearer
-  # token and the Gemini key stays solely in the Secret.
+  # token and the Mistral key stays solely in the Secret.
   master_key: null

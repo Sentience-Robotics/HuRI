@@ -65,17 +65,17 @@ variable "gpu_node_zones" {
 }
 
 # ---------------------------------------------------------------------------
-# Fast LLM (LiteLLM -> Gemini)
+# Fast LLM (LiteLLM -> Mistral)
 # ---------------------------------------------------------------------------
 
-# NOTE: the Gemini API key is NO LONGER a Terraform variable. It is read from GCP
-# Secret Manager (secret id "gemini_api_key") in secrets.tf. Populate it out of
+# NOTE: the Mistral API key is NOT a Terraform variable. It is read from GCP
+# Secret Manager (secret id "mistral_api_key") in secrets.tf. Populate it out of
 # band per the README before applying.
 
 variable "llm_model" {
-  description = "Gemini model the LiteLLM 'huri-fast' alias forwards to. Any fast, >4B model works."
+  description = "Mistral model the LiteLLM 'huri-fast' alias forwards to (via Mistral's OpenAI-compatible API). Any fast model works."
   type        = string
-  default     = "gemini-2.5-flash"
+  default     = "open-mistral-nemo" # Mistral NeMo 12B
 }
 
 # ---------------------------------------------------------------------------

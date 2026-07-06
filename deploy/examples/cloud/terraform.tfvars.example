@@ -23,8 +23,8 @@ gpu_count        = 1
 # Leave empty/unset for single-zone behavior (pool stays in `zone`).
 gpu_node_zones = ["europe-west4-a", "europe-west4-b", "europe-west4-c"]
 
-# Fast LLM (LiteLLM -> Gemini). Override the model if you like; any fast >4B model.
-llm_model = "gemini-2.5-flash"
+# Fast LLM (LiteLLM -> Mistral). Override the model if you like; any fast model.
+llm_model = "open-mistral-nemo" # Mistral NeMo 12B
 
 # Website image registry (the "GCR"). HuRI owns the Artifact Registry repo; the
 # website backend image is built/pushed into it and deployed by the website's own
@@ -34,7 +34,7 @@ website_image_location = "europe-west4"
 website_image_repo     = "huri"
 
 # -----------------------------------------------------------------------------
-# Secrets are NOT set here and are NOT Terraform variables. The Gemini API key
-# lives in GCP Secret Manager (secret id "gemini_api_key") and is read by
+# Secrets are NOT set here and are NOT Terraform variables. The Mistral API key
+# lives in GCP Secret Manager (secret id "mistral_api_key") and is read by
 # secrets.tf. Create it once, out of band, before applying — see README §1.
 # -----------------------------------------------------------------------------

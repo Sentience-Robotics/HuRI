@@ -1,11 +1,12 @@
-# LiteLLM proxy — a fast, OpenAI-compatible LLM endpoint backed by Gemini.
+# LiteLLM proxy — a fast, OpenAI-compatible LLM endpoint backed by Mistral.
 #
 # The RAGHandle (values-gcp.yaml user_config) points llm_url at
 # http://litellm.huri.svc.cluster.local:4000 with llm_provider: vllm and
 # llm_model: huri-fast. LiteLLM exposes /v1/chat/completions (with streaming),
-# which is exactly the path the handler builds, and forwards to Gemini.
+# which is exactly the path the handler builds, and forwards to Mistral's
+# OpenAI-compatible API.
 
-# Gemini API key, read from GCP Secret Manager (secrets.tf), never committed.
+# Mistral API key, read from GCP Secret Manager (secrets.tf), never committed.
 resource "kubernetes_secret_v1" "litellm" {
   metadata {
     name      = "litellm-secrets"
@@ -14,17 +15,17 @@ resource "kubernetes_secret_v1" "litellm" {
   data = {
     # trimspace() guards against a trailing newline/CRLF in the Secret Manager
     # value (e.g. created with `echo` instead of `printf`). LiteLLM puts this
-    # key straight into the outbound x-goog-api-key header, and aiohttp rejects
+    # key straight into the outbound Authorization header, and aiohttp rejects
     # any header value containing \r or \n ("header injection"), which surfaces
     # as a 500 back to the RAG caller.
-    GEMINI_API_KEY = trimspace(data.google_secret_manager_secret_version.gemini_api_key.secret_data)
+    MISTRAL_API_KEY = trimspace(data.google_secret_manager_secret_version.mistral_api_key.secret_data)
   }
 
   # The huri namespace is created by the qdrant release; reuse it.
   depends_on = [helm_release.qdrant]
 }
 
-# model_list config, with the Gemini model name templated in.
+# model_list config, with the Mistral model name templated in.
 resource "kubernetes_config_map_v1" "litellm" {
   metadata {
     name      = "litellm-config"
