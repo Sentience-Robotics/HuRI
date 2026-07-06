@@ -95,6 +95,8 @@ class STT(ModuleWithHandle):
         as "en" or "fr".
     :sample_rate: size of received voice audio. Usually 8000, 16000 or 48000.
     :block_duration: size of received voice audio (in s).
+    :transcribe_window: duration of audio per transcription (in s).
+    :transcribe_step: overlap between consecutive transcription windows (in s).
     """
 
     _handle_cls = STTDeployment
@@ -123,9 +125,6 @@ class STT(ModuleWithHandle):
 
         self.silence: bool = True
 
-        self.prev_text: str = ""
-        self.stable_text: str = ""
-
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
@@ -151,7 +150,6 @@ class STT(ModuleWithHandle):
                 return None
             processing_chunks = self.buffer[: self.window_size]
 
-        self.pending_silence = False
         processing_audio = np.concatenate(processing_chunks, axis=0)
 
         current_text = await self._handle.transcribe.remote(

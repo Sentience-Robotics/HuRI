@@ -526,7 +526,9 @@ def main():
 
     if needs_embeddings:
         if args.embedding_url:
-            print(f"Embedding remotely via {args.embedding_url} (model={args.embedding_model})")
+            print(
+                f"Embedding remotely via {args.embedding_url} (model={args.embedding_model})"
+            )
             model = RemoteEmbedder(args.embedding_url, args.embedding_model)
         else:
             from sentence_transformers import SentenceTransformer
