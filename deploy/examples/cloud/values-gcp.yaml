@@ -6,7 +6,7 @@ image:
   # Artifact Registry BEFORE `terraform apply` — see ../../../gcp_steps.md §1c.
   # The GPU worker group below overrides this with the nvidia image.
   repository: europe-west4-docker.pkg.dev/hurigcp/huri/huri
-  tag: base-2.55.1@sha256:056ca6663293260570cefc8d8928b5b5fa0f5268cb9bfd7b737ac18e91e78f01
+  tag: base-2.55.1@sha256:dc440f2507a8998e1f48c9c36d06625fd8d12c971dafeda8fccfd6fc802e68cc
   pullPolicy: IfNotPresent
 
 # The KubeRay operator is installed as its OWN Helm release
@@ -201,7 +201,7 @@ head:
 workerGroups:
   - groupName: gpu-nvidia
     # Private Artifact Registry (the "GCR"): {location}-docker.pkg.dev/{project}/{repo}/huri:{tag}
-    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:1684bc1b2fc83d6c18e421fdf60905e83c209b07531770036d18b0f720c56138
+    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:6d0dff1e3951faa42f7a38bfee5f7434c7094fc675f5d342ecb942f69d71c662
     replicas: 1
     minReplicas: 1
     # One V100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),
@@ -241,12 +241,14 @@ workerGroups:
       # actor requests num_cpus:1, so this — not the GPU fraction — is what caps
       # how many replicas pack onto the card.
       num-cpus: "6"
-    # PVCs mounted into this (V100) worker: whisper (STT) + cosytts (TTS). Their
-    # download Jobs are pinned to this same gpu node (see models.* above) so the
-    # zonal RWO PVCs bind in the V100's zone. emage stays unmounted (disabled).
+    # PVCs mounted into this (V100) worker: whisper (STT) + cosytts (TTS) +
+    # emotion (EMO prosody). Their download Jobs are pinned to this same gpu node
+    # (see models.* above) so the zonal RWO PVCs bind in the V100's zone. emage
+    # stays unmounted (disabled).
     mountedModels:
       - whisper
       - cosytts
+      - emotion
     resources:
       # Sized for n1-standard-8 (8 vCPU / 30 GB / 1*V100 16GB), the machine the
       # tfvars provisions. GKE leaves only ~7.5 allocatable vCPU and ~26Gi
@@ -318,6 +320,33 @@ models:
       repoId: Systran/faster-whisper-base
     env:
       HURI_STT_MODEL_PATH: /models/whisper/Systran/faster-whisper-base
+  # Prosody / emotion model for the EMO module (voice -> emotion). Enabling the
+  # full-prosody voice pipeline (emo + eag + qag) in the website's huri_config.yaml
+  # made EMO load superb/hubert-large-superb-er (~1.2GB HF audio-classification
+  # model). EMO is a PLAIN Module — it runs inside the gpu-nvidia worker process
+  # and loads the weights with transformers `from_pretrained(<path>)`, so without a
+  # cached copy every session would re-download from HuggingFace at init. We cache
+  # it on a PVC here (same zonal-RWO, gpu-node-pinned download-Job pattern as
+  # whisper/cosytts) and point the module at the mount via huri_config.yaml
+  # (emo.args.model_name: /models/emotion/superb/hubert-large-superb-er). Unlike
+  # whisper/STT, EMO reads no env var for its path — hence the module arg, not `env`.
+  emotion:
+    enabled: true
+    nodeSelector:
+      gpu: nvidia
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    pvc:
+      storageClassName: "standard-rwo"
+      size: 3Gi
+      accessModes:
+        - ReadWriteOnce
+    mountPath: /models/emotion
+    modelSource:
+      type: huggingface
+      repoId: superb/hubert-large-superb-er
   # emage (gesture) weights stay DISABLED on GCP: GestureGeneration is already
   # HEALTHY without them. Leave off until it's actually needed.
   emage:

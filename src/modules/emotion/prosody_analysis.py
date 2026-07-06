@@ -2,8 +2,6 @@ import asyncio
 from typing import List, Optional
 
 import numpy as np
-import torch
-from transformers import AutoModelForAudioClassification, Wav2Vec2FeatureExtractor
 
 from src.core.module import Module
 from src.modules.speech_to_text.events import Voice
@@ -37,6 +35,8 @@ class EMO(Module):
     ):
         super().__init__()
 
+        from transformers import AutoModelForAudioClassification, Wav2Vec2FeatureExtractor
+
         self.model = AutoModelForAudioClassification.from_pretrained(model_name)
         self.feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
 
@@ -51,6 +51,8 @@ class EMO(Module):
         self.lock: asyncio.Lock = asyncio.Lock()
 
     def _predict_emotion(self, audio_np: np.ndarray):
+        import torch
+
         inputs = self.feature_extractor(
             audio_np, sampling_rate=self.sample_rate, return_tensors="pt", padding=True
         )

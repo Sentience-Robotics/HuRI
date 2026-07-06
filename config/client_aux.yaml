@@ -11,9 +11,6 @@ senders:
   text:
     name: text
     topic: question
-    args:
-      sample_rate: 16000
-      frame_duration: 0.030
 
 modules:
   mic:
@@ -21,13 +18,13 @@ modules:
     args:
       vad_agressiveness: 3
       silence_duration: 1.5
-      block_duration: ${inputs.audio.args.frame_duration}
+      block_duration: 0.030
     logging: INFO
   stt:
     name: stt
     args:
       language: "en"
-      block_duration: ${inputs.audio.args.frame_duration}
+      block_duration: 0.030
     logging: INFO
   tag:
     name: tag
@@ -35,7 +32,7 @@ modules:
   emo:
     name: emo
     args:
-      block_duration: ${senders.audio.args.frame_duration}
+      block_duration: 0.030
   eag:
     name: eag
   qag:
@@ -50,8 +47,6 @@ modules:
     logging: INFO
   tts:
     name: tts
-    args:
-      min_clause_chars: 20
     logging: INFO
   gesture:
     name: gesture

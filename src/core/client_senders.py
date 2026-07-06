@@ -11,7 +11,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
 
 from src.core.events import EventData
-from src.modules.speech_to_text.events import Sentence
+from src.modules.rag.events import RAGQuestion
+from src.modules.speech_to_text.events import Transcript
 
 
 class ClientSender:
@@ -92,7 +93,9 @@ class TextSender(ClientSender):
                     text = await session.prompt_async(">> ")
                 if text == "\\exit":
                     return
-                await self.send(self.output_type, Sentence(text))
+                await self.send(
+                    self.output_type, RAGQuestion(Transcript(text, True), None)
+                )
 
         except (EOFError, KeyboardInterrupt):
             pass

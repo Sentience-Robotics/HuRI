@@ -385,7 +385,7 @@ class RAGHandle:
 class RAG(ModuleWithHandle, ModuleWithId):
     """RAG Module — streams LLM tokens.
 
-    input:  question (Sentence)
+    input:  question (RAGQuestion)
     output: token    (Token)
     """
 

@@ -37,7 +37,7 @@ class EventDataFactory:
 
         else:
             if issubclass(event_cls, EventData):
-                return event_cls(**data)
+                return event_cls.from_wire(data)
             else:
                 raise RuntimeError(f"mismatched event data type: \
 {event_cls} is not derived from EventData but should be.")

@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -15,7 +16,17 @@ class EventData:
     """An event data must be derived from this class, and use @dataclass decorator.
     Or they can be bytes."""
 
-    pass
+    @classmethod
+    def from_wire(cls, data: Mapping[str, Any]) -> "EventData":
+        """Build an event from a JSON payload sent by a client.
+
+        Default: keyword-splat the payload onto the dataclass. Events whose fields
+        are nested dataclasses (or that accept a simpler external shape than the
+        in-pipeline one) override this — e.g. RAGQuestion accepts a bare
+        ``{"text": ...}`` typed question. In-process producers construct the
+        dataclass directly and never go through this path.
+        """
+        return cls(**data)
 
 
 class EventGraph:
