@@ -6,7 +6,7 @@ image:
   # Artifact Registry BEFORE `terraform apply` — see ../../../gcp_steps.md §1c.
   # The GPU worker group below overrides this with the nvidia image.
   repository: europe-west4-docker.pkg.dev/hurigcp/huri/huri
-  tag: base-2.55.1@sha256:dc440f2507a8998e1f48c9c36d06625fd8d12c971dafeda8fccfd6fc802e68cc
+  tag: base-2.55.1@sha256:3c85b5b04965eb64f1e7d9032b843da9abf72596d0fd53b2c264709f45058ab0
   pullPolicy: IfNotPresent
 
 # The KubeRay operator is installed as its OWN Helm release
@@ -201,7 +201,7 @@ head:
 workerGroups:
   - groupName: gpu-nvidia
     # Private Artifact Registry (the "GCR"): {location}-docker.pkg.dev/{project}/{repo}/huri:{tag}
-    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:6d0dff1e3951faa42f7a38bfee5f7434c7094fc675f5d342ecb942f69d71c662
+    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:8412c6759cc33a079fc0fc96a08e780042e82ff8f8475ba3ce1d70609e412a85
     replicas: 1
     minReplicas: 1
     # One V100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),
