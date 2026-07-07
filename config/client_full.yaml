@@ -8,6 +8,20 @@ senders:
     args:
       sample_rate: 16000
       frame_duration: 0.030
+  text:
+    name: text
+    topic: question
+    args:
+      sample_rate: 16000
+      frame_duration: 0.030
+
+hooks:
+  audio:
+    name: audio
+    topics: [audio]
+    args:
+      incoming_sample_rate: ${senders.audio.args.sample_rate}
+      sample_rate: 44100
 
 modules:
   mic:
@@ -26,6 +40,14 @@ modules:
   tag:
     name: tag
     logging: INFO
+  emo:
+    name: emo
+    args:
+      block_duration: ${senders.audio.args.frame_duration}
+  eag:
+    name: eag
+  qag:
+    name: qag
   rag:
     name: rag
     args:

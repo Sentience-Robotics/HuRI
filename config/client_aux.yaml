@@ -15,6 +15,12 @@ senders:
     args:
       sample_rate: 16000
       frame_duration: 0.030
+  text:
+    name: text
+    topic: question
+    args:
+      sample_rate: 16000
+      frame_duration: 0.030
 
 hooks:
   text:

@@ -129,5 +129,17 @@ config: {client_config}")
             finally:
                 print(f"Client {client_config.user_id} disconnected")
 
-        await receive_loop(self.clients[session_id], ws)
-        del self.clients[session_id]
+        try:
+            await receive_loop(self.clients[session_id], ws)
+        finally:
+            # Persist per-session state (e.g. conversation memory) on disconnect.
+            for module in modules:
+                fin = getattr(module, "finalize", None)
+                if fin is None:
+                    continue
+                try:
+                    await fin()
+                except Exception:
+                    import traceback
+                    print(f"[HuRI] finalize failed for {type(module).__name__}:\n{traceback.format_exc()}")
+            self.clients.pop(session_id, None)
