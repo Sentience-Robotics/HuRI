@@ -37,11 +37,20 @@ class QAG(Module):
         if partial_question.transcript is not None:
             self.current_transcript = partial_question.transcript
 
-        if self.current_transcript is not None:
-            if self.use_emotion:
-                if self.current_emotion is not None:
-                    return RAGQuestion(self.current_transcript, self.current_emotion)
-            else:
-                return RAGQuestion(self.current_transcript, None)
+        if self.current_transcript is None:
+            return None
+        # With emotion enabled, hold the question back until its emotion lands.
+        if self.use_emotion and self.current_emotion is None:
+            return None
 
-        return None
+        emotion = self.current_emotion if self.use_emotion else None
+        question = RAGQuestion(self.current_transcript, emotion)
+
+        # Clear the aggregation state after firing. Otherwise a later partial
+        # carrying only one half (the next turn's emotion-only update, or a
+        # stray transcript) re-emits this same question with stale data — which
+        # made the avatar answer the previous turn again. TAG/EAG already reset
+        # their own state on emit; QAG must do the same.
+        self.current_transcript = None
+        self.current_emotion = None
+        return question

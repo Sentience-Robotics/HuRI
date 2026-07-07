@@ -83,24 +83,24 @@ class GestureDeployment:
 
         print("[Gesture] loading face_vq...")
         face_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/face").to(
-            self.device
+            self.device  # type: ignore[arg-type]
         )
         print("[Gesture] loading upper_vq...")
         upper_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/upper"
-        ).to(self.device)
+        ).to(self.device)  # type: ignore[arg-type]
         print("[Gesture] loading lower_vq...")
         lower_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/lower"
-        ).to(self.device)
+        ).to(self.device)  # type: ignore[arg-type]
         print("[Gesture] loading hands_vq...")
         hands_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/hands"
-        ).to(self.device)
+        ).to(self.device)  # type: ignore[arg-type]
         print("[Gesture] loading global_ae...")
         global_ae = EmageVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/global"
-        ).to(self.device)
+        ).to(self.device)  # type: ignore[arg-type]
 
         self.motion_vq = EmageVQModel(
             face_model=face_vq,
@@ -112,7 +112,9 @@ class GestureDeployment:
         self.motion_vq.eval()
 
         print("[Gesture] loading EmageAudioModel...")
-        self.model = EmageAudioModel.from_pretrained(hf_repo).to(self.device)
+        self.model = EmageAudioModel.from_pretrained(hf_repo).to(
+            self.device  # type: ignore[arg-type]
+        )
         self.model.eval()
 
         self._warmup()
@@ -167,12 +169,12 @@ class GestureDeployment:
                         torch.cuda.synchronize(self.device)
                     print(
                         f"[Gesture] warmup pass {pass_idx} {s:.2f}s "
-                        f"({n} samples @ {_WARMUP_SRC_SR} Hz) \
-in {time.time() - ts:.2f}s",
+                        f"({n} samples @ {_WARMUP_SRC_SR} Hz) "
+                        f"in {time.time() - ts:.2f}s",
                     )
             print(
-                f"[Gesture] warmup done ({len(secs)} shapes x2) \
-in {time.time() - t0:.2f}s",
+                f"[Gesture] warmup done ({len(secs)} shapes x2) "
+                f"in {time.time() - t0:.2f}s",
             )
         except Exception as e:  # noqa: BLE001 — warmup is an optimisation, never fatal
             print(f"[Gesture] WARNING warmup failed: {e!r}")
@@ -339,7 +341,9 @@ class Gesture(ModuleWithHandle):
         self._buf_start = 0
         self._emitted = 0
 
-    async def process(self, audio: Audio) -> AsyncGenerator[Motion, None]:
+    async def process(  # type: ignore[override]
+        self, audio: Audio
+    ) -> AsyncGenerator[Motion, None]:
         # Each chunk arrives as its own process() task on the shared per-session
         # instance, so serialise under a lock to keep the buffer ordered.
         async with self._lock:

@@ -15,17 +15,11 @@ senders:
     args:
       sample_rate: 16000
       frame_duration: 0.030
-  text:
-    name: text
-    topic: question
-    args:
-      sample_rate: 16000
-      frame_duration: 0.030
 
 hooks:
-  text:
-    name: text
-    topics: [question, answer]
+  token:
+    name: token
+    topics: [token]
   audio:
     name: audio
     topics: [audio]
@@ -48,10 +42,34 @@ modules:
   #     block_duration: ${senders.audio.args.frame_duration}
   # tag:
   #   name: tag
+  stt:
+    name: stt
+    args:
+      language: "en"
+      block_duration: 0.030
+    logging: INFO
+  tag:
+    name: tag
+    logging: INFO
+  emo:
+    name: emo
+    args:
+      block_duration: 0.030
+  eag:
+    name: eag
+  qag:
+    name: qag
   rag:
     name: rag
     args:
       language: en
       tone: formal
+      response_format: paragraph
+      max_length: 1024
+    logging: INFO
   tts:
     name: tts
+    logging: INFO
+  gesture:
+    name: gesture
+    logging: INFO

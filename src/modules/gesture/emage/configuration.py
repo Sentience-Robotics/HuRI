@@ -1,3 +1,5 @@
+from typing import Any, Dict, cast
+
 from omegaconf import OmegaConf
 from transformers import PretrainedConfig
 
@@ -7,7 +9,9 @@ class EmageAudioConfig(PretrainedConfig):
 
     def __init__(self, config_obj=None, **kwargs):
         if config_obj is not None:
-            cfg_dict = OmegaConf.to_container(config_obj, resolve=True)
+            cfg_dict = cast(
+                Dict[str, Any], OmegaConf.to_container(config_obj, resolve=True)
+            )
             kwargs.update(cfg_dict)
         super().__init__(**kwargs)
 
@@ -17,7 +21,9 @@ class EmageVQVAEConvConfig(PretrainedConfig):
 
     def __init__(self, config_obj=None, **kwargs):
         if config_obj is not None:
-            cfg_dict = OmegaConf.to_container(config_obj, resolve=True)
+            cfg_dict = cast(
+                Dict[str, Any], OmegaConf.to_container(config_obj, resolve=True)
+            )
             kwargs.update(cfg_dict)
         super().__init__(**kwargs)
 
@@ -27,6 +33,8 @@ class EmageVAEConvConfig(PretrainedConfig):
 
     def __init__(self, config_obj=None, **kwargs):
         if config_obj is not None:
-            cfg_dict = OmegaConf.to_container(config_obj, resolve=True)
+            cfg_dict = cast(
+                Dict[str, Any], OmegaConf.to_container(config_obj, resolve=True)
+            )
             kwargs.update(cfg_dict)
         super().__init__(**kwargs)

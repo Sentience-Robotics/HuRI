@@ -38,8 +38,11 @@ ENV LD_LIBRARY_PATH="${ROCM_PATH}/lib:${LD_LIBRARY_PATH}"
 USER ray
 
 
+# constraints.txt pins protobuf==4.25.8 so dep-resolving installs below can't
+# bump protobuf past 4.x (breaks Ray Serve's _proto_to_dict). See the file.
+COPY constraints.txt /app
 COPY serve_requirements.txt /app
-RUN pip install --no-cache-dir -r serve_requirements.txt
+RUN pip install --no-cache-dir -c /app/constraints.txt -r serve_requirements.txt
 
 # 1. AMD's PyTorch built for ROCm (NOT the PyPI one — it's built for ROCm 6.2 and will silently break)
 ARG ROCM_VERSION=7.2
@@ -69,11 +72,11 @@ RUN apt-get update && apt-get install -y unzip curl \
 USER ray
 
 # 4. faster-whisper
-RUN pip install --no-cache-dir faster-whisper
+RUN pip install --no-cache-dir -c /app/constraints.txt faster-whisper
 
 # 5. RAG / LLM extras (httpx, qdrant-client, sentence-transformers, …)
 #    Installed last so the ROCm torch wheel installed above is the resolved one.
 COPY requirements-amd.txt /app
-RUN pip install --no-cache-dir -r requirements-amd.txt
+RUN pip install --no-cache-dir -c /app/constraints.txt -r requirements-amd.txt
 
 COPY src /app/src

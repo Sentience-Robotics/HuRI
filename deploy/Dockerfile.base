@@ -10,7 +10,10 @@ build-essential \
 
 USER ray
 
+# constraints.txt pins protobuf==4.25.8 so serve_requirements.txt's deps can't
+# bump protobuf past 4.x (breaks Ray Serve's _proto_to_dict). See the file.
+COPY constraints.txt /app
 COPY serve_requirements.txt /app
-RUN pip install --no-cache-dir -r serve_requirements.txt
+RUN pip install --no-cache-dir -c /app/constraints.txt -r serve_requirements.txt
 
 COPY src /app/src

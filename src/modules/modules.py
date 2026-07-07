@@ -19,7 +19,6 @@ def get_modules() -> Dict[str, Type[Module]]:
         "stt": STT,
         "tag": TAG,
         "emo": EMO,
-        "rag": RAG,
         "eag": EAG,
         "qag": QAG,
         "rag": RAG,

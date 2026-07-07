@@ -12,9 +12,9 @@ from scipy.signal import resample
 
 from src.core.client import ClientHook, ClientSender
 from src.core.interface import Interface
-from src.modules.rag.events import RAGResult
-from src.modules.speech_to_text.events import Sentence
-from src.modules.text_to_speech.events import Audio
+from src.modules.rag.events import RAGQuestion, RAGResult
+from src.modules.speech_to_text.events import Transcript
+from src.modules.text_to_speech.events import Audio, Token
 
 
 class AudioSender(ClientSender[bytes]):
@@ -46,8 +46,8 @@ class AudioSender(ClientSender[bytes]):
                 await self.send(ws, chunk.tobytes())
 
 
-class TextSender(ClientSender[Sentence]):
-    output_type = Sentence
+class TextSender(ClientSender[RAGQuestion]):
+    output_type = RAGQuestion
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -61,7 +61,7 @@ class TextSender(ClientSender[Sentence]):
                     text = await session.prompt_async(">> ")
                 if text == "\\exit":
                     return
-                await self.send(ws, Sentence(text))
+                await self.send(ws, RAGQuestion(Transcript(text, True), None))
 
         except (EOFError, KeyboardInterrupt):
             pass
@@ -172,6 +172,26 @@ class TextHook(ClientHook[RAGResult]):
         print("<<", data.answer)
 
 
+class TokenHook(ClientHook[Token]):
+    """Print the RAG's streamed reply token-by-token (topic ``token``).
+
+    This is the live text output of the pipeline (RAG -> Token). The website
+    backend consumes the same stream; the CLI just echoes each delta inline and
+    emits a newline on the end-of-utterance marker.
+    """
+
+    input_type = Token
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    async def hook(self, data: Token):
+        if data.end:
+            print()
+        else:
+            print(data.text, end="", flush=True)
+
+
 class CLIInterface(Interface):
     def __init__(self):
         super().__init__(singletton=None)
@@ -180,7 +200,7 @@ class CLIInterface(Interface):
         return {"audio": AudioSender, "text": TextSender}
 
     def get_hooks(self) -> Dict[str, Type[ClientHook]]:
-        return {"audio": AudioHook, "text": TextHook}
+        return {"audio": AudioHook, "text": TextHook, "token": TokenHook}
 
 
 cli_interface = CLIInterface()

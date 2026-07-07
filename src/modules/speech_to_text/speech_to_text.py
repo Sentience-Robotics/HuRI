@@ -1,5 +1,6 @@
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import numpy as np
@@ -11,9 +12,10 @@ from src.core.module import ModuleWithHandle
 from .events import Transcript, Voice
 
 _MODEL_PATH = os.environ.get("HURI_STT_MODEL_PATH", "base")
+_NUM_WORKERS = int(os.environ.get("HURI_STT_NUM_WORKERS", "2"))
 
 
-@serve.deployment(name="STT")
+@serve.deployment(name="STT", max_ongoing_requests=8)
 class STTDeployment:
     """faster-whisper model wrapper.
 
@@ -36,16 +38,39 @@ class STTDeployment:
         model: str = _MODEL_PATH,
         device: str = "auto",
         compute_type: str = "auto",
+        num_workers: int = _NUM_WORKERS,
     ):
         from faster_whisper import WhisperModel
 
+        # num_workers lets CTranslate2 service several transcriptions at once on
+        # this single replica — each "worker" is an independent inference slot
+        # over the shared (read-only) weights. Combined with the thread pool
+        # below, N sessions are transcribed concurrently while staying fully
+        # independent: no per-call client state is ever held here (the sliding
+        # window lives in the per-session STT module).
         self.model_faster = WhisperModel(
             model,
             device=device,
             compute_type=compute_type,
+            num_workers=num_workers,
+        )
+        # Run the *blocking* faster-whisper call off the actor's asyncio loop.
+        # transcribe() used to be an async method that called the synchronous
+        # model inline, blocking the replica's event loop for the whole inference
+        # — serialising every session on the replica and stalling Serve health
+        # checks. Offloading to a thread pool (sized to num_workers) keeps the
+        # loop free to accept other sessions' requests while inference runs.
+        self._executor = ThreadPoolExecutor(
+            max_workers=num_workers, thread_name_prefix="stt-transcribe"
         )
 
     async def transcribe(self, audio: np.ndarray, language: str = "en") -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._executor, self._transcribe_sync, audio, language
+        )
+
+    def _transcribe_sync(self, audio: np.ndarray, language: str) -> str:
         segments, _ = self.model_faster.transcribe(
             audio,
             language=language,
@@ -103,6 +128,13 @@ class STT(ModuleWithHandle):
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
+        # Whether we've transcribed some non-empty speech during the CURRENT
+        # utterance. Guards the end-of-turn reset (in process()) against a stray
+        # noise blip that transcribes to "" being mistaken for a finished turn.
+        # It is cleared when the turn ends, so the session handles continuous
+        # back-to-back turns rather than latching shut after the first one.
+        self._heard_speech: bool = False
+
     async def process(self, voice: Voice) -> Optional[Transcript]:
         if voice.data is None:
             self.silence = True
@@ -133,7 +165,27 @@ class STT(ModuleWithHandle):
 
         processed_size = self.window_size - self.step_size
         async with self.lock:
-            self.buffer = self.buffer[processed_size:]
             self.running = False
+
+            # Track that we've heard actual speech this turn (guards the reset
+            # below against a stray noise blip that transcribes to "").
+            if current_text:
+                self._heard_speech = True
+
+            if self.silence and self._heard_speech:
+                # End of a real utterance. This Transcript carries end=True, so
+                # TAG/QAG emit the finished question downstream. Reset per-turn
+                # state so the NEXT utterance is fully independent: drop the
+                # residual sliding-window frames (they would otherwise be
+                # re-transcribed as a phantom continuation of this turn) and clear
+                # the speech flag. The client mutes the mic while the avatar
+                # responds (half-duplex), so its own TTS can't echo back and open
+                # a spurious turn — which is what the old single-turn latch was
+                # working around.
+                self.buffer = []
+                self._heard_speech = False
+            else:
+                # Mid-utterance: slide the window forward, keeping the overlap.
+                self.buffer = self.buffer[processed_size:]
 
         return Transcript(current_text, self.silence)

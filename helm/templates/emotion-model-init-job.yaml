@@ -1,6 +1,6 @@
-{{- if .Values.models.whisper.enabled }}
-{{- $model := .Values.models.whisper }}
-{{- $pvcName := printf "%s-whisper-models" (include "huri.fullname" .) }}
+{{- if .Values.models.emotion.enabled }}
+{{- $model := .Values.models.emotion }}
+{{- $pvcName := printf "%s-emotion-models" (include "huri.fullname" .) }}
 {{- if not (lookup "v1" "PersistentVolumeClaim" .Release.Namespace $pvcName) }}
 ---
 apiVersion: v1
@@ -28,7 +28,7 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "huri.fullname" . }}-whisper-init
+  name: {{ include "huri.fullname" . }}-emotion-init
   labels:
     {{- include "huri.labels" . | nindent 4 }}
   annotations:
@@ -47,19 +47,28 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with $model.tolerations }}
+      # Lets the download Job schedule onto a tainted node (e.g. a GPU node with
+      # nvidia.com/gpu=present:NoSchedule) so the PVC binds in that node's zone —
+      # required when the mounting worker is a GPU pod on a zonal RWO PVC.
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: models
           persistentVolumeClaim:
-            claimName: {{ include "huri.fullname" . }}-whisper-models
+            claimName: {{ include "huri.fullname" . }}-emotion-models
       containers:
-        - name: whisper-downloader
+        - name: emotion-downloader
           image: python:3.11-slim
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -e
               MODEL_DIR="{{ $model.mountPath }}/{{ $model.modelSource.repoId }}"
-              if [ -f "$MODEL_DIR/model.bin" ]; then
+              # config.json is the reliable presence marker for a HF transformers
+              # repo (the weights file name varies: pytorch_model.bin / *.safetensors).
+              if [ -f "$MODEL_DIR/config.json" ]; then
                 echo "Model already present at $MODEL_DIR — skipping download."
                 exit 0
               fi
@@ -82,5 +91,5 @@ spec:
               memory: "512Mi"
             limits:
               cpu: "2"
-              memory: "1Gi"
+              memory: "2Gi"
 {{- end }}
