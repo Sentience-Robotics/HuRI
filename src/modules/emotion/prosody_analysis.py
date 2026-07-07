@@ -75,25 +75,47 @@ class EMO(Module):
         }
 
     async def process(self, voice: Voice) -> Optional[Emotion]:
+        # End-of-utterance marker. MIC emits Voice(None) exactly ONCE per
+        # utterance, and this call MUST always produce an Emotion(end=True): it is
+        # what makes EAG finalize and, in turn, unblocks QAG (with use_emotion=True
+        # QAG holds the entire question until this emotion lands). The old code
+        # routed the marker through the same `running` / sliding-window guard as
+        # speech frames, so whenever an inference was mid-flight — or a late frame
+        # flipped the shared `self.silence` back to False before it was read — the
+        # single end marker was silently dropped and the whole voice turn hung.
+        # Handle it on its own path so it can never be swallowed.
         if voice.data is None:
-            self.silence = True
-        else:
-            self.silence = False
             async with self.lock:
-                self.buffer.append(voice.data)
+                self.silence = True
+                tail = self.buffer
+                self.buffer = []
+            # Read the tail so the final emotion reflects the actual utterance;
+            # fall back to a short zero buffer for a very short turn so the
+            # feature extractor still gets valid input and EAG gets scores.
+            audio = (
+                np.concatenate(tail, axis=0)
+                if tail
+                else np.zeros(self.sample_rate // 10, dtype=np.float32)
+            )
+            emotion_result = await asyncio.to_thread(
+                self._predict_emotion, audio_np=audio
+            )
+            return Emotion(
+                emotion_result["label"],
+                emotion_result["confidence"],
+                emotion_result["scores"],
+                True,
+            )
 
+        # Speech frame: accumulate, and once a full analysis window is buffered run
+        # one interim inference (end=False). Only one inference runs at a time;
+        # extra frames just buffer until it finishes.
         async with self.lock:
-            if self.running:
+            self.silence = False
+            self.buffer.append(voice.data)
+            if self.running or len(self.buffer) < self.window_size:
                 return None
             self.running = True
-
-        async with self.lock:
-            buffer_size = len(self.buffer)
-            if buffer_size == 0 or (
-                self.silence is False and buffer_size < self.window_size
-            ):
-                self.running = False
-                return None
             processing_chunks = self.buffer[: self.window_size]
 
         processing_audio = np.concatenate(processing_chunks, axis=0)
@@ -110,5 +132,5 @@ class EMO(Module):
             emotion_result["label"],
             emotion_result["confidence"],
             emotion_result["scores"],
-            self.silence,
+            False,
         )

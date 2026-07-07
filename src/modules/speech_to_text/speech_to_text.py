@@ -128,25 +128,14 @@ class STT(ModuleWithHandle):
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
-        # TEMP FIX (single-turn latch). Whether we've already transcribed some
-        # non-empty speech this utterance, and whether the utterance has ended.
-        # Once the user finishes speaking their first real utterance (silence
-        # after real speech), we stop consuming further voice input for the rest
-        # of this session — see the note in process().
+        # Whether we've transcribed some non-empty speech during the CURRENT
+        # utterance. Guards the end-of-turn reset (in process()) against a stray
+        # noise blip that transcribes to "" being mistaken for a finished turn.
+        # It is cleared when the turn ends, so the session handles continuous
+        # back-to-back turns rather than latching shut after the first one.
         self._heard_speech: bool = False
-        self._utterance_complete: bool = False
 
     async def process(self, voice: Voice) -> Optional[Transcript]:
-        # TEMP FIX: once the user has finished one real utterance and it has
-        # flowed through the pipeline, ignore all further incoming voice. Without
-        # this, continued audio — residual buffered frames, or the avatar's own
-        # TTS output echoing back into the mic — keeps getting transcribed into a
-        # second question and triggers another full LLM + TTS response "all at
-        # once". The latch is per STT instance, i.e. per WebSocket session, so
-        # reconnecting resets it and lets the user speak again.
-        if self._utterance_complete:
-            return None
-
         if voice.data is None:
             self.silence = True
         else:
@@ -176,16 +165,27 @@ class STT(ModuleWithHandle):
 
         processed_size = self.window_size - self.step_size
         async with self.lock:
-            self.buffer = self.buffer[processed_size:]
             self.running = False
 
-            # TEMP FIX: latch the session closed once a *real* utterance ends.
-            # Track that we've heard actual speech (guards against a stray noise
-            # blip that transcribes to "" locking the user out before they ever
-            # speak); latch only when that speech is followed by silence.
+            # Track that we've heard actual speech this turn (guards the reset
+            # below against a stray noise blip that transcribes to "").
             if current_text:
                 self._heard_speech = True
+
             if self.silence and self._heard_speech:
-                self._utterance_complete = True
+                # End of a real utterance. This Transcript carries end=True, so
+                # TAG/QAG emit the finished question downstream. Reset per-turn
+                # state so the NEXT utterance is fully independent: drop the
+                # residual sliding-window frames (they would otherwise be
+                # re-transcribed as a phantom continuation of this turn) and clear
+                # the speech flag. The client mutes the mic while the avatar
+                # responds (half-duplex), so its own TTS can't echo back and open
+                # a spurious turn — which is what the old single-turn latch was
+                # working around.
+                self.buffer = []
+                self._heard_speech = False
+            else:
+                # Mid-utterance: slide the window forward, keeping the overlap.
+                self.buffer = self.buffer[processed_size:]
 
         return Transcript(current_text, self.silence)
