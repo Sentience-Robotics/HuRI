@@ -642,7 +642,9 @@ class RAG(ModuleWithHandle, ModuleWithId):
         super().__init__(_handle=_handle, _user_id=_user_id, **kwargs)
 
         print(
-            f"[RAG] Initialized with user_id={_user_id}, language={language}, tone={tone}, response_format={response_format}, max_length={max_length}, temperature={temperature}, max_history_turns={max_history_turns}"
+            f"[RAG] Initialized with user_id={_user_id}, language={language}, "
+            f"tone={tone}, response_format={response_format}, max_length={max_length}, "
+            f"temperature={temperature}, max_history_turns={max_history_turns}"
         )
 
         self.preferences = {

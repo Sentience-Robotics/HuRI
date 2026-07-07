@@ -17,12 +17,17 @@ class Sender(Module):
     """Sender Module
 
     Send output data to the client.
-    This data must be JSON serialisable, like a dataclass.
-    Audio wire format:  [4B sample_rate uint32][1B end][8B pts float64][float32 PCM].
-    Motion wire format: [8B pts float64][4B fps uint32][4B n_frames uint32]
-                        [poses float32 n*165][expressions float32 n*100][trans float32 n*3].
 
-    input: auto, output: None"""
+    This data must be JSON serialisable, like a dataclass.
+
+    Audio wire format:
+        [4B sample_rate uint32][1B end][8B pts float64][float32 PCM].
+    Motion wire format:
+        [8B pts float64][4B fps uint32][4B n_frames uint32]
+        [poses float32 n*165][expressions float32 n*100][trans float32 n*3].
+
+    input: auto,
+    output: None"""
 
     output_type = None
 
@@ -31,8 +36,7 @@ class Sender(Module):
         self.ws: WebSocket = ws
         self.input_type = type
 
-    async def process(self, _):
-        data = _
+    async def process(self, data: EventData | bytes):
         logger.info("[Sender:%s] received %s", self.input_type, type(data).__name__)
         if isinstance(data, bytes):
             await self.ws.send_bytes(self._prefix(data))
@@ -63,10 +67,8 @@ class Sender(Module):
                 + data.trans.astype(np.float32).tobytes()
             )
             await self.ws.send_bytes(self._prefix(header + body))
-        elif isinstance(data, EventData):
-            await self.ws.send_json({"topic": self.input_type, **asdict(data)})
         else:
-            await self.ws.send_text(str(data))
+            await self.ws.send_json({"topic": self.input_type, "data": asdict(data)})
 
     def _prefix(self, payload: bytes) -> bytes:
         topic_bytes = self.input_type.encode()

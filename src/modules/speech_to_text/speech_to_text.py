@@ -103,7 +103,7 @@ class STT(ModuleWithHandle):
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
-    async def process(self, voice: Voice) -> Optional[Transcript]:  # type: ignore[override]
+    async def process(self, voice: Voice) -> Optional[Transcript]:
         if voice.data is None:
             self.silence = True
         else:

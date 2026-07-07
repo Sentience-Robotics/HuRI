@@ -172,7 +172,7 @@ class TTS(ModuleWithHandle):
         # and silently drop trailing words).
         self._push_lock = asyncio.Lock()
 
-    async def process(self, token: Token) -> AsyncGenerator[Audio, None]:  # type: ignore[override]
+    async def process(self, token: Token) -> AsyncGenerator[Audio, None]:
         # Acquire BEFORE any await so lock-acquisition order matches token order.
         # Setup + push happen under the lock; only the first token of an
         # utterance goes on to drain/yield audio (outside the lock, so pushes of
