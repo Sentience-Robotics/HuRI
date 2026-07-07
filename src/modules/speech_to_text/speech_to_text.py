@@ -128,7 +128,25 @@ class STT(ModuleWithHandle):
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
+        # TEMP FIX (single-turn latch). Whether we've already transcribed some
+        # non-empty speech this utterance, and whether the utterance has ended.
+        # Once the user finishes speaking their first real utterance (silence
+        # after real speech), we stop consuming further voice input for the rest
+        # of this session — see the note in process().
+        self._heard_speech: bool = False
+        self._utterance_complete: bool = False
+
     async def process(self, voice: Voice) -> Optional[Transcript]:
+        # TEMP FIX: once the user has finished one real utterance and it has
+        # flowed through the pipeline, ignore all further incoming voice. Without
+        # this, continued audio — residual buffered frames, or the avatar's own
+        # TTS output echoing back into the mic — keeps getting transcribed into a
+        # second question and triggers another full LLM + TTS response "all at
+        # once". The latch is per STT instance, i.e. per WebSocket session, so
+        # reconnecting resets it and lets the user speak again.
+        if self._utterance_complete:
+            return None
+
         if voice.data is None:
             self.silence = True
         else:
@@ -160,5 +178,14 @@ class STT(ModuleWithHandle):
         async with self.lock:
             self.buffer = self.buffer[processed_size:]
             self.running = False
+
+            # TEMP FIX: latch the session closed once a *real* utterance ends.
+            # Track that we've heard actual speech (guards against a stray noise
+            # blip that transcribes to "" locking the user out before they ever
+            # speak); latch only when that speech is followed by silence.
+            if current_text:
+                self._heard_speech = True
+            if self.silence and self._heard_speech:
+                self._utterance_complete = True
 
         return Transcript(current_text, self.silence)
