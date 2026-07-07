@@ -3,43 +3,43 @@
 image:
   # Image for the Ray HEAD and any worker group without its own `image:` (CPU
   # actors land here). Built from deploy/Dockerfile.base and pushed to the
-  # Artifact Registry BEFORE `terraform apply` — see ../../../gcp_steps.md §1c.
+  # Artifact Registry BEFORE `terraform apply` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â see ../../../gcp_steps.md Ãƒâ€šÃ‚Â§1c.
   # The GPU worker group below overrides this with the nvidia image.
   repository: europe-west4-docker.pkg.dev/hurigcp/huri/huri
-  tag: base-2.55.1@sha256:373a050d952882ef4e6101a28ef6aefa3d4747c7e668f24c4cefd1cf5a5e0063
+  tag: base-2.55.1@sha256:514da8e891d7f7fccd723ebd422db11ca12c55de153d6aa3b68fb010cf405689
   pullPolicy: IfNotPresent
 
 # The KubeRay operator is installed as its OWN Helm release
 # (helm_release.kuberay_operator in main.tf), so this chart must not also bundle
-# it as a sub-chart — otherwise the operator's cluster-scoped RBAC (e.g.
+# it as a sub-chart ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise the operator's cluster-scoped RBAC (e.g.
 # raycronjob-editor-role) collides with the existing release's Helm ownership.
 kuberay:
   install: false
 
 ray:
-  # RayService.spec.rayClusterConfig.rayVersion — MUST be a non-null string or the
+  # RayService.spec.rayClusterConfig.rayVersion ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â MUST be a non-null string or the
   # KubeRay CRD rejects the object under Helm's server-side apply ("rayVersion:
   # Invalid value: null"). Match the Ray version baked into the images
   # (deploy/Dockerfile.base/.nvidia -> FROM rayproject/ray:2.55.1).
   version: "2.55.1"
-  # Layer ② — let the Ray (KubeRay) autoscaler add GPU worker pods when Serve
+  # Layer ÃƒÂ¢Ã¢â‚¬ËœÃ‚Â¡ ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â let the Ray (KubeRay) autoscaler add GPU worker pods when Serve
   # asks for replicas that don't fit on the current pods. Pairs with the
   # workerGroups maxReplicas below and the GKE node-pool autoscaling in gke.tf
-  # (layer ③). Leave unset/false in the local single-GPU values to stay pinned.
+  # (layer ÃƒÂ¢Ã¢â‚¬ËœÃ‚Â¢). Leave unset/false in the local single-GPU values to stay pinned.
   enableInTreeAutoscaling: true
   # First-bring-up ceiling (ray.io/initializing-timeout). Must exceed a cold GPU
   # node provision + driver install + nvidia image pull, or the RayService hits a
   # TERMINAL failure state and stops recreating the cluster (see rayservice.yaml).
   # Set to 24h (not 40m): during an L4 stockout the gpu-pool can sit "GCE out of
   # resources" for hours. A short timeout makes the RayService self-destruct and
-  # tear down the head + the *standing Pending GPU worker* — which is the only
+  # tear down the head + the *standing Pending GPU worker* ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is the only
   # thing that keeps the autoscaler asking GCE for capacity. A long timeout keeps
   # that request alive so the node is grabbed the moment stock returns. Lower it
   # back to ~40m once you're off scarce/on-demand GPU capacity.
   initializingTimeout: "24h"
   # Give a cold GPU worker time to come up before KubeRay declares the cluster
-  # unhealthy and recreates it. On GCP the gpu-pool scales 0→1, the node installs
-  # drivers, and the large nvidia image is pulled — easily several minutes. With
+  # unhealthy and recreates it. On GCP the gpu-pool scales 0ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢1, the node installs
+  # drivers, and the large nvidia image is pulled ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â easily several minutes. With
   # the default (~5 min) thresholds the Serve deployments are still UPDATING when
   # the controller gives up, so it deletes the RayCluster (head + worker
   # terminate together) and the cycle repeats. 1800s/1200s comfortably covers a
@@ -68,8 +68,8 @@ ray:
             # only affects throughput, never isolation. Raise for more
             # simultaneous speakers; it shares the one GPU slice below.
             HURI_STT_NUM_WORKERS: "2"
-        # ──────────────────────────────────────────────────────────────────
-        # Autoscaling (layer ①: Ray Serve replicas).
+        # ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+        # Autoscaling (layer ÃƒÂ¢Ã¢â‚¬ËœÃ‚Â : Ray Serve replicas).
         # The autoscaling_config blocks below let Serve add/remove model
         # replicas based on in-flight requests:
         #   desired = ceil(total_ongoing_requests / target_ongoing_requests)
@@ -77,19 +77,19 @@ ray:
         # replica so the baseline never cold-starts.
         #
         # End-to-end GPU autoscaling is now wired across all three layers:
-        #   ① these autoscaling_config blocks            (Serve replicas)
-        #   ② ray.enableInTreeAutoscaling + workerGroups maxReplicas (KubeRay
+        #   ÃƒÂ¢Ã¢â‚¬ËœÃ‚Â  these autoscaling_config blocks            (Serve replicas)
+        #   ÃƒÂ¢Ã¢â‚¬ËœÃ‚Â¡ ray.enableInTreeAutoscaling + workerGroups maxReplicas (KubeRay
         #      scales GPU worker pods)
-        #   ③ gke.tf gpu_nodes autoscaling { }           (GKE provisions GPU VMs)
-        # Flow: load rises → Serve wants replicas → no free GPU → KubeRay adds a
-        # worker pod → pod Pending → GKE adds a GPU node → replica runs.
+        #   ÃƒÂ¢Ã¢â‚¬ËœÃ‚Â¢ gke.tf gpu_nodes autoscaling { }           (GKE provisions GPU VMs)
+        # Flow: load rises ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Serve wants replicas ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ no free GPU ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ KubeRay adds a
+        # worker pod ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ pod Pending ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ GKE adds a GPU node ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ replica runs.
         # The remaining ceiling is GPU quota + budget (and per-zone node counts
         # for the regional pool). Cold-start is minutes (VM + driver + model
         # load), so min_replicas:1 stays warm; for bursts on the existing GPU,
         # HURI_STT_NUM_WORKERS adds in-replica concurrency without waiting for a
         # node.
         #
-        # GPU PACKING NOTE — num_gpus below is a *logical* Ray fraction, not a
+        # GPU PACKING NOTE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â num_gpus below is a *logical* Ray fraction, not a
         # memory reservation; it only controls how many actors Ray packs per
         # card. Sized for the V100 16GB (n1-standard-8): each model's real
         # footprint is a few GB (Whisper base <1GB, CosyVoice3 ~4GB, EMAGE ~3GB),
@@ -97,11 +97,11 @@ ray:
         # replicas onto ONE card before autoscaling buys a second:
         #   baseline (1 each): STT 0.2 + TTS 0.1 + Gesture 0.1 = 0.4
         #   one full V100 e.g.: STT*3 + TTS*2 + Gesture*2 = 1.0
-        # Shrink further for more density — the binding limit is logical packing,
+        # Shrink further for more density ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the binding limit is logical packing,
         # not memory. (On a 16GB T4 you'd raise these back toward ~0.5/0.2/0.2.)
-        # ──────────────────────────────────────────────────────────────────
+        # ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
         deployments:
-          # Stateful WebSocket ingress + per-session routing — single coordinator,
+          # Stateful WebSocket ingress + per-session routing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â single coordinator,
           # not autoscaled.
           - name: HuRI
             num_replicas: 1
@@ -116,14 +116,14 @@ ray:
             max_ongoing_requests: 8
             autoscaling_config:
               min_replicas: 1
-              max_replicas: 4          # 0.2 GPU each → up to ~4 share one A100
+              max_replicas: 4          # 0.2 GPU each ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ up to ~4 share one A100
               target_ongoing_requests: 4
             ray_actor_options:
               num_cpus: 1
               num_gpus: 0.2
               resources: {"GPU_TYPE_NVIDIA": 0.2}
           - name: RAGHandle
-            # CPU/network-bound (num_gpus: 0) — these replicas schedule on the
+            # CPU/network-bound (num_gpus: 0) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â these replicas schedule on the
             # existing nodes without needing GPU, so this one genuinely scales
             # within the current cluster. Work is async LLM/embedding I/O.
             max_ongoing_requests: 16
@@ -201,7 +201,7 @@ head:
 workerGroups:
   - groupName: gpu-nvidia
     # Private Artifact Registry (the "GCR"): {location}-docker.pkg.dev/{project}/{repo}/huri:{tag}
-    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:0d9e226884955d643dee2d1d4e33931f7f5b563b2e99a3e6b86dd0f9722f9994
+    image: europe-west4-docker.pkg.dev/hurigcp/huri/huri:nvidia-2.55.1@sha256:c68efb655adbe7024f389996256922293127e55bf9008667e949364c95f0d9c2
     replicas: 1
     minReplicas: 1
     # One V100 node (gpu_max_nodes = 1) hosts one worker pod (nvidia.com/gpu: 1),
@@ -217,7 +217,7 @@ workerGroups:
     # nvidia.com/gpu, but the KubeRay worker pod must not rely on that admission
     # path: without this toleration the worker stays Pending on a healthy GPU node
     # (node provisions Ready, pod never lands, KubeRay tears the cluster down,
-    # autoscaler reclaims the idle node — an endless up/down loop).
+    # autoscaler reclaims the idle node ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â an endless up/down loop).
     tolerations:
       - key: nvidia.com/gpu
         operator: Exists
@@ -238,7 +238,7 @@ workerGroups:
     rayStartParams:
       num-gpus: "1"
       # Pin Ray's logical CPU count to match the pod requests below. Each model
-      # actor requests num_cpus:1, so this — not the GPU fraction — is what caps
+      # actor requests num_cpus:1, so this ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not the GPU fraction ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â is what caps
       # how many replicas pack onto the card.
       num-cpus: "6"
     # PVCs mounted into this (V100) worker: whisper (STT) + cosytts (TTS) +
@@ -271,14 +271,14 @@ workerGroups:
   # we simply don't define the group.
 
 # Voice models (STT/TTS) mount on the gpu-nvidia (V100) worker. Their PVCs use
-# standard-rwo — a ZONAL ReadWriteOnce PD that can only attach to a node in the
+# standard-rwo ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a ZONAL ReadWriteOnce PD that can only attach to a node in the
 # zone it was provisioned in. The gpu-pool is pinned to us-central1-c (gpu_node_zones
 # in terraform.tfvars) so the V100 lands there with the already-bound PVCs, while the
 # system pool is pinned to us-central1-a. So the download Jobs MUST run in the V100's
 # zone, i.e. ON the gpu
 # node itself (nodeSelector gpu: nvidia), so WaitForFirstConsumer binds each PVC
 # where the worker can mount it. That node carries nvidia.com/gpu=present:NoSchedule
-# and the Job requests no GPU, so GKE won't auto-inject a toleration — we add it.
+# and the Job requests no GPU, so GKE won't auto-inject a toleration ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â we add it.
 models:
   cosytts:
     enabled: true
@@ -323,13 +323,13 @@ models:
   # Prosody / emotion model for the EMO module (voice -> emotion). Enabling the
   # full-prosody voice pipeline (emo + eag + qag) in the website's huri_config.yaml
   # made EMO load superb/hubert-large-superb-er (~1.2GB HF audio-classification
-  # model). EMO is a PLAIN Module — it runs inside the gpu-nvidia worker process
+  # model). EMO is a PLAIN Module ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it runs inside the gpu-nvidia worker process
   # and loads the weights with transformers `from_pretrained(<path>)`, so without a
   # cached copy every session would re-download from HuggingFace at init. We cache
   # it on a PVC here (same zonal-RWO, gpu-node-pinned download-Job pattern as
   # whisper/cosytts) and point the module at the mount via huri_config.yaml
   # (emo.args.model_name: /models/emotion/superb/hubert-large-superb-er). Unlike
-  # whisper/STT, EMO reads no env var for its path — hence the module arg, not `env`.
+  # whisper/STT, EMO reads no env var for its path ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â hence the module arg, not `env`.
   emotion:
     enabled: true
     nodeSelector:
@@ -370,20 +370,20 @@ voiceAssets:
     HURI_VOICE_SAMPLE_PATH: /assets/voice.wav
 
 # The raw Ray Serve websocket (huri-serve-svc:8000) is INTENTIONALLY not exposed
-# by an Ingress. It has no authentication of its own — the website backend is the
+# by an Ingress. It has no authentication of its own ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the website backend is the
 # auth layer (OIDC relying party that pins the Authelia `sub` as the RAG
 # partition key). Publishing this socket would let anyone connect to /session
 # directly, bypass Authelia, and read/poison any user's RAG documents by setting
 # an arbitrary user_id. The website reaches HuRI privately over the in-cluster
 # ClusterIP (ws://huri-serve-svc.huri.svc.cluster.local:8000/session); only the
-# website (app.huri.pommier.dev) and Authelia (auth.huri.pommier.dev) — both in
-# the website-demo Terraform (HuRI_website_demo/deploy) — are public.
+# website (app.huri.pommier.dev) and Authelia (auth.huri.pommier.dev) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â both in
+# the website-demo Terraform (HuRI_website_demo/deploy) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â are public.
 ingress:
   enabled: false
 
 # Ray Dashboard (port 8265) ingress. Kept DISABLED on GCP: there is no nginx
 # ingress controller in this cluster, and the dashboard has no auth of its own
-# (same reasoning as the serve socket above — exposing it publicly is unsafe).
+# (same reasoning as the serve socket above ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exposing it publicly is unsafe).
 # The chart's ingress-dashboard.yaml template dereferences this block, so it must
 # exist even when disabled. Reach the dashboard ad hoc with a port-forward:
 #   kubectl port-forward -n huri svc/huri-head-svc 8265:8265
