@@ -149,9 +149,17 @@ class Client:
                     data = event["data"]
 
                 for hook in self.hooks[topic]:
-                    if not isinstance(data, bytes):
-                        data = hook.input_type(**data)
-                    asyncio.create_task(hook.hook(data))
+                    # Hydrate via from_wire (not a bare **data splat) so events
+                    # with nested EventData fields — e.g. RAGQuestion.transcript /
+                    # .emotion — are rebuilt as dataclasses, mirroring the server's
+                    # EventDataFactory. Build a fresh instance per hook so a topic
+                    # with several hooks doesn't re-splat an already-built event.
+                    hook_data = (
+                        data
+                        if isinstance(data, bytes)
+                        else hook.input_type.from_wire(data)
+                    )
+                    asyncio.create_task(hook.hook(hook_data))
 
         except (asyncio.CancelledError, websockets.ConnectionClosedOK):
             pass

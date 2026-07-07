@@ -8,9 +8,9 @@ senders:
     topic: question
 
 hooks:
-  text:
-    name: text
-    topics: [rag_response]
+  token:
+    name: token
+    topics: [token]
 
 modules:
   rag:

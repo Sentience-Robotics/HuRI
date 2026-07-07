@@ -15,14 +15,11 @@ senders:
     args:
       sample_rate: 16000
       frame_duration: 0.030
-  text:
-    name: text
-    topic: question
 
 hooks:
-  text:
-    name: text
-    topics: [question, answer]
+  token:
+    name: token
+    topics: [token]
   audio:
     name: audio
     topics: [audio]
@@ -45,13 +42,6 @@ modules:
   #     block_duration: ${senders.audio.args.frame_duration}
   # tag:
   #   name: tag
-  rag:
-    name: rag
-    args:
-      vad_agressiveness: 3
-      silence_duration: 1.5
-      block_duration: 0.030
-    logging: INFO
   stt:
     name: stt
     args:

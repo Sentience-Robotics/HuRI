@@ -543,6 +543,21 @@ class RAGHandle:
             "you genuinely know nothing relevant, improvise in character rather "
             "than admitting you lack information or breaking character. "
         )
+
+        # open-mistral-nemo loves to open replies with "Ah, ..." / "Oh, ...",
+        # which garble the text-to-speech. Give it POSITIVE examples only:
+        # spelling out a banned opener in full ("Ah, the humble cheese...")
+        # primes the model to echo it. Scoped to Ah/Oh; other phrasing is left
+        # alone. (Reinforced at the tail of the user prompt too — the slot the
+        # model reads last, where formatting rules stick best.)
+        parts.append(
+            "One firm rule about how you speak: never begin a reply with the "
+            'exclamation "Ah" or "Oh". Spoken aloud by your text-to-speech, '
+            "those two openers come out garbled. Start straight on the "
+            'substance instead — e.g. open with "The Swiss variety is my '
+            'favourite." or "Of course I can help." This applies only to a '
+            'leading "Ah"/"Oh"; phrase everything else however suits you.'
+        )
         system_prompt = " ".join(parts)
 
         memory_block = ""
@@ -575,6 +590,14 @@ class RAGHandle:
                 "Answer based on the context and your memories above. "
                 "Don't speak about the sources, just use them to answer."
             )
+
+        # Final line the model reads before generating — the highest-compliance
+        # slot for a formatting rule. open-mistral-nemo skips the persona-level
+        # no-Ah/Oh rule often enough that we restate it right at the tail.
+        user_prompt += (
+            '\n\nStart your answer straight on the substance — do not open with '
+            '"Ah" or "Oh".'
+        )
 
         return system_prompt, user_prompt
 
