@@ -1,42 +1,23 @@
-import argparse
-import logging
 import time
 
-import yaml
+import ray
 
-from src.core.huri import HuRI, HuriConfig
-from src.modules.factory import build_module_factory
+from src.core.huri import serve
 
-
-def load_config(path: str) -> HuriConfig:
-    with open(path) as f:
-        raw = yaml.safe_load(f)
-
-    return HuriConfig.from_dict(raw)
+from .app import build_app
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="HuRI core")
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to HuRI config file (YAML)",
-    )
+    ray.init()
 
-    args = parser.parse_args()
-
-    config = load_config(args.config)
-
-    build_module_factory()
-
-    huri = HuRI(config)
+    app = build_app()
     time.sleep(0.1)
     try:
-        huri.run()
+        serve.run(app, name="HuRI", blocking=True)
     except KeyboardInterrupt:
-        huri.stop()
+        return
     except Exception as e:
-        logging.getLogger(__name__).error(e)
+        ray.logger.error(e)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+# Global pip constraints for all HuRI images. Pass to EVERY `pip install` via
+# `-c /app/constraints.txt` so a later requirements file cannot silently override
+# these versions (which is exactly how protobuf got clobbered before).
+#
+# protobuf: Ray Serve 2.55's ray/serve/_private/config.py:_proto_to_dict() reads
+# FieldDescriptor.label, an attribute protobuf's upb (C) backend removed at >=5.0.
+# With protobuf 5/6/7 every Serve replica crashes in __init__ with
+#   AttributeError: 'FieldDescriptor' object has no attribute 'label'
+# 4.25.8 is the floor onnxruntime requires (>=4.25.8) and stays <5 for
+# google-api-core / googleapis-common-protos / proto-plus / opentelemetry-proto /
+# google-cloud-storage, so it satisfies the whole dependency graph.
+protobuf==4.25.8
