@@ -75,7 +75,7 @@ variable "gpu_node_zones" {
 variable "llm_model" {
   description = "Mistral model the LiteLLM 'huri-fast' alias forwards to (via Mistral's OpenAI-compatible API). Any fast model works."
   type        = string
-  default     = "open-mistral-nemo" # Mistral NeMo 12B
+  default     = "ministral-14b-latest"
 }
 
 # ---------------------------------------------------------------------------

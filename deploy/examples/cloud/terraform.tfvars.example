@@ -24,7 +24,7 @@ gpu_count        = 1
 gpu_node_zones = ["europe-west4-a", "europe-west4-b", "europe-west4-c"]
 
 # Fast LLM (LiteLLM -> Mistral). Override the model if you like; any fast model.
-llm_model = "open-mistral-nemo" # Mistral NeMo 12B
+llm_model = "ministral-14b-latest"
 
 # Website image registry (the "GCR"). HuRI owns the Artifact Registry repo; the
 # website backend image is built/pushed into it and deployed by the website's own
