@@ -11,13 +11,14 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from scipy.signal import resample
 
 from src.core.client import ClientHook, ClientSender
+from src.core.events import RawBytes
 from src.core.interface import Interface
 from src.modules.rag.events import RAGQuestion, RAGResult
 from src.modules.speech_to_text.events import Transcript
 from src.modules.text_to_speech.events import Audio, Token
 
 
-class AudioSender(ClientSender[bytes]):
+class AudioSender(ClientSender[RawBytes]):
     def __init__(
         self, sample_rate: int = 16000, frame_duration: float = 0.030, **kwargs
     ):
@@ -43,7 +44,7 @@ class AudioSender(ClientSender[bytes]):
         ):
             while True:
                 chunk = await queue.get()
-                await self.send(ws, chunk.tobytes())
+                await self.send(ws, RawBytes(data=chunk.tobytes()))
 
 
 class TextSender(ClientSender[RAGQuestion]):
@@ -162,14 +163,14 @@ class AudioHook(ClientHook[Audio]):
             self._collect_audio(data.data, data.sample_rate, bool(data.end))
 
 
-class TextHook(ClientHook[RAGResult]):
-    input_type = RAGResult
+class TextHook(ClientHook[RAGQuestion]):
+    input_type = RAGQuestion
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    async def hook(self, data: RAGResult):
-        print("<<", data.answer)
+    async def hook(self, data: RAGQuestion):
+        print("<<", data.transcript, data.emotion)
 
 
 class TokenHook(ClientHook[Token]):

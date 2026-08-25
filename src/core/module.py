@@ -1,6 +1,7 @@
 from typing import Any, AsyncGenerator, Coroutine, Optional, Type
 
 from ray.serve import handle
+from .events import EventData
 
 
 class Module:
@@ -24,7 +25,9 @@ class Module:
     input_type: str
     output_type: Optional[str]
 
-    def process(self, _) -> Coroutine[Any, Any, Any] | AsyncGenerator[Any, None]:
+    def process(
+        self, _
+    ) -> Coroutine[Any, Any, EventData] | AsyncGenerator[EventData, None]:
         raise NotImplementedError
 
 

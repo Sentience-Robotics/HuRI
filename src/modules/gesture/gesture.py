@@ -307,7 +307,7 @@ class Gesture(ModuleWithHandle):
     """
 
     _handle_cls = GestureDeployment
-    input_type = "audio"
+    input_type = "audio.out"
     output_type = "motion"
 
     def __init__(

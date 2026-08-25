@@ -32,7 +32,7 @@ class HuRI:
         self,
         modules: Dict[str, Type[Module]],
         handles: Dict[str, handle.DeploymentHandle],
-        events: Dict[str, Type[EventData | bytes]],
+        events: Dict[str, Type[EventData]],
     ) -> None:
         self.module_factory = ModuleFactory(handles)
         self.event_factory = EventDataFactory()

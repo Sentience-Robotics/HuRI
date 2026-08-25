@@ -232,7 +232,7 @@ class TTS(ModuleWithHandle):
 
     _handle_cls = TTSDeployment
     input_type = "token"
-    output_type = "audio"
+    output_type = "audio.out"
 
     def __init__(self, _handle: handle.DeploymentHandle):
         super().__init__(_handle)
