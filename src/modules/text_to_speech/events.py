@@ -4,19 +4,19 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.core.events import EventData
+from src.core.events import EventData, JsonEvent
 
 logger = logging.getLogger("ray.serve")
 
 
 @dataclass
-class Token(EventData):
+class Token(JsonEvent):
     text: str
     end: bool
 
 
 @dataclass
-class Audio(EventData):
+class Audio(EventData[bytes]):
     data: np.ndarray
     sample_rate: int
     end: bool = False
@@ -38,7 +38,7 @@ class Audio(EventData):
         sample_rate, end, pts = struct.unpack(">IBd", data[:13])
         samples = np.frombuffer(data[13:], dtype=np.float32)
 
-        return cls(sample_rate=sample_rate, end=end, pts=pts, samples=samples)
+        return cls(sample_rate=sample_rate, end=end, pts=pts, data=samples)
 
     def summarize(self) -> str:
         """Short repr that avoids dumping full numpy arrays into the log."""

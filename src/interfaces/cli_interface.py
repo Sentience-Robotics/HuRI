@@ -11,14 +11,14 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from scipy.signal import resample
 
 from src.core.client import ClientHook, ClientSender
-from src.core.events import RawBytes
+from src.core.events import BytesEvent
 from src.core.interface import Interface
-from src.modules.rag.events import RAGQuestion, RAGResult
+from src.modules.rag.events import RAGQuestion
 from src.modules.speech_to_text.events import Transcript
 from src.modules.text_to_speech.events import Audio, Token
 
 
-class AudioSender(ClientSender[RawBytes]):
+class AudioSender(ClientSender[BytesEvent]):
     def __init__(
         self, sample_rate: int = 16000, frame_duration: float = 0.030, **kwargs
     ):
@@ -44,7 +44,7 @@ class AudioSender(ClientSender[RawBytes]):
         ):
             while True:
                 chunk = await queue.get()
-                await self.send(ws, RawBytes(data=chunk.tobytes()))
+                await self.send(ws, BytesEvent(data=chunk.tobytes()))
 
 
 class TextSender(ClientSender[RAGQuestion]):
@@ -75,9 +75,9 @@ class AudioHook(ClientHook[Audio]):
 
     def __init__(
         self,
+        save_audio_dir: str,
         sample_rate=48000,
         incoming_sample_rate=16000,
-        save_audio_dir: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
