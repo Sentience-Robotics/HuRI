@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any, Mapping
 
 import numpy as np
@@ -18,15 +18,22 @@ class EventData:
 
     @classmethod
     def from_wire(cls, data: Mapping[str, Any]) -> "EventData":
-        """Build an event from a JSON payload sent by a client.
-
-        Default: keyword-splat the payload onto the dataclass. Events whose fields
-        are nested dataclasses (or that accept a simpler external shape than the
-        in-pipeline one) override this — e.g. RAGQuestion accepts a bare
-        ``{"text": ...}`` typed question. In-process producers construct the
-        dataclass directly and never go through this path.
-        """
         return cls(**data)
+
+    def to_wire(self) -> Mapping[str, Any] | bytes:
+        return asdict(self)
+
+
+@dataclass
+class RawBytes(EventData):
+    data: bytes
+
+    @classmethod
+    def from_wire(cls, data: bytes) -> "RawBytes":
+        return cls(data=data)
+
+    def to_wire(self) -> bytes:
+        return self.data
 
 
 class EventGraph:
@@ -112,7 +119,7 @@ class EventGraph:
             )
 
 
-def _summarize(item) -> str:
+def _summarize(item) -> str:  # TODO event data summarize function
     """Short repr that avoids dumping full numpy arrays into the log."""
     cls = type(item).__name__
     data = getattr(item, "data", None)
