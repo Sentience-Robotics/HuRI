@@ -4,7 +4,7 @@ import json
 import struct
 from collections import defaultdict
 from dataclasses import asdict
-from typing import Any, Dict, Generic, List, Type, TypeVar, Mapping
+from typing import Any, Dict, Generic, List, Mapping, Type, TypeVar
 
 import numpy as np
 import websockets

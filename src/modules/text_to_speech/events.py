@@ -1,10 +1,10 @@
-from dataclasses import dataclass
 import logging
+import struct
+from dataclasses import dataclass
 
 import numpy as np
 
 from src.core.events import EventData
-import struct
 
 logger = logging.getLogger("ray.serve")
 

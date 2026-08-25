@@ -3,8 +3,8 @@ from typing import Optional
 import numpy as np
 import webrtcvad
 
-from src.core.module import Module
 from src.core.events import RawBytes
+from src.core.module import Module
 
 from .events import Voice
 

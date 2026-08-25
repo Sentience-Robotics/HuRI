@@ -1,8 +1,8 @@
 import asyncio
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, asdict
-from typing import Any, Mapping, cast, AsyncGenerator, Coroutine
+from dataclasses import asdict, dataclass
+from typing import Any, AsyncGenerator, Coroutine, Mapping, cast
 
 import numpy as np
 

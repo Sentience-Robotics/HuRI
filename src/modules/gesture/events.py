@@ -1,9 +1,10 @@
+import logging
+import struct
 from dataclasses import dataclass
 
 import numpy as np
-import struct
+
 from src.core.events import EventData
-import logging
 
 _EMAGE_FPS = 30
 
