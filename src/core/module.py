@@ -27,7 +27,7 @@ class Module:
 
     def process(
         self, _
-    ) -> Coroutine[Any, Any, EventData] | AsyncGenerator[EventData, None]:
+    ) -> Coroutine[Any, Any, EventData | None] | AsyncGenerator[EventData | None, None]:
         raise NotImplementedError
 
 

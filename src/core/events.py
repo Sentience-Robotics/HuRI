@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, asdict
-from typing import Any, Mapping
+from typing import Any, Mapping, cast, AsyncGenerator, Coroutine
 
 import numpy as np
 
@@ -23,6 +23,10 @@ class EventData:
     def to_wire(self) -> Mapping[str, Any] | bytes:
         return asdict(self)
 
+    def summarize(self) -> str:
+        cls = type(self).__name__
+        return f"{cls}({self!r})"
+
 
 @dataclass
 class RawBytes(EventData):
@@ -34,6 +38,10 @@ class RawBytes(EventData):
 
     def to_wire(self) -> bytes:
         return self.data
+
+    def summarize(self) -> str:
+        cls = type(self).__name__
+        return f"{cls}(len:{len(self.data)})"
 
 
 class EventGraph:
@@ -82,14 +90,15 @@ class EventGraph:
 
             if hasattr(result, "__aiter__"):
                 try:
-                    async for item in result:
+                    generator = cast(AsyncGenerator[EventData | None, None], result)
+                    async for item in generator:
                         if item is None:
                             continue
                         logger.info(
                             "[GRAPH] %s -> %r: %s",
                             type(module).__name__,
                             module.output_type,
-                            _summarize(item),
+                            item.summarize(),
                         )
                         await self.publish(module.output_type, item)
                 except Exception:
@@ -98,14 +107,15 @@ class EventGraph:
                     )
 
             else:
+                coroutine = cast(Coroutine[Any, Any, EventData | None], result)
                 try:
-                    value = await result
+                    value = await coroutine
                     if value is not None:
                         logger.info(
                             "[GRAPH] %s -> %r: %s",
                             type(module).__name__,
                             module.output_type,
-                            _summarize(value),
+                            value.summarize(),
                         )
                         await self.publish(module.output_type, value)
                 except Exception:
@@ -117,12 +127,3 @@ class EventGraph:
             logger.exception(
                 "[GRAPH] process() call failed in %s", type(module).__name__
             )
-
-
-def _summarize(item) -> str:  # TODO event data summarize function
-    """Short repr that avoids dumping full numpy arrays into the log."""
-    cls = type(item).__name__
-    data = getattr(item, "data", None)
-    if isinstance(data, np.ndarray):
-        return f"{cls}(shape={data.shape}, dtype={data.dtype})"
-    return f"{cls}({item!r})"

@@ -15,3 +15,12 @@ class Transcript(EventData):
 @dataclass
 class Voice(EventData):
     data: Optional[np.ndarray]
+
+    def summarize(self) -> str:
+        """Short repr that avoids dumping full numpy arrays into the log."""
+
+        if self.data:
+            cls = type(self).__name__
+            return f"{cls}(shape={self.data.shape}, dtype={self.data.dtype})"
+        else:
+            return super().summarize()

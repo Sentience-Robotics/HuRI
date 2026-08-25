@@ -39,3 +39,9 @@ class Audio(EventData):
         samples = np.frombuffer(data[13:], dtype=np.float32)
 
         return cls(sample_rate=sample_rate, end=end, pts=pts, samples=samples)
+
+    def summarize(self) -> str:
+        """Short repr that avoids dumping full numpy arrays into the log."""
+
+        cls = type(self).__name__
+        return f"{cls}(shape={self.data.shape}, dtype={self.data.dtype})"
