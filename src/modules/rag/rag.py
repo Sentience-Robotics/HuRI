@@ -778,9 +778,7 @@ class RAG(ModuleWithHandle, ModuleWithId):
         self._max_history_turns = max_history_turns
         self.history: list[dict] = []
 
-    async def process(  # type: ignore[override]
-        self, data: RAGQuestion
-    ) -> AsyncGenerator[Token, None]:
+    async def process(self, data: RAGQuestion) -> AsyncGenerator[Token, None]:
         """
         Called when a "question" event arrives through the event bus.
         Packages _user_id + question, sends to the stateless RAGHandle.

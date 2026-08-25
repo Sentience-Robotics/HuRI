@@ -12,7 +12,7 @@ logger = logging.getLogger("ray.serve")
 
 
 @dataclass
-class Motion(EventData):
+class Motion(EventData[bytes]):
     poses: np.ndarray  # (t, 165)  SMPL-X axis-angle, 55 joints × 3
     expressions: np.ndarray  # (t, 100)  facial expression coefficients
     trans: np.ndarray  # (t, 3)    global root translation

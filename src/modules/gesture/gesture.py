@@ -83,32 +83,24 @@ class GestureDeployment:
 
         print("[Gesture] loading face_vq...")
         face_vq = EmageVQVAEConv.from_pretrained(hf_repo, subfolder="emage_vq/face").to(
-            self.device  # type: ignore[arg-type]
+            self.device
         )
         print("[Gesture] loading upper_vq...")
         upper_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/upper"
-        ).to(
-            self.device
-        )  # type: ignore[arg-type]
+        ).to(self.device)
         print("[Gesture] loading lower_vq...")
         lower_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/lower"
-        ).to(
-            self.device
-        )  # type: ignore[arg-type]
+        ).to(self.device)
         print("[Gesture] loading hands_vq...")
         hands_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/hands"
-        ).to(
-            self.device
-        )  # type: ignore[arg-type]
+        ).to(self.device)
         print("[Gesture] loading global_ae...")
         global_ae = EmageVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/global"
-        ).to(
-            self.device
-        )  # type: ignore[arg-type]
+        ).to(self.device)
 
         self.motion_vq = EmageVQModel(
             face_model=face_vq,
@@ -120,9 +112,7 @@ class GestureDeployment:
         self.motion_vq.eval()
 
         print("[Gesture] loading EmageAudioModel...")
-        self.model = EmageAudioModel.from_pretrained(hf_repo).to(
-            self.device  # type: ignore[arg-type]
-        )
+        self.model = EmageAudioModel.from_pretrained(hf_repo).to(self.device)
         self.model.eval()
 
         self._warmup()
@@ -349,9 +339,7 @@ class Gesture(ModuleWithHandle):
         self._buf_start = 0
         self._emitted = 0
 
-    async def process(  # type: ignore[override]
-        self, audio: Audio
-    ) -> AsyncGenerator[Motion, None]:
+    async def process(self, audio: Audio) -> AsyncGenerator[Motion, None]:
         # Each chunk arrives as its own process() task on the shared per-session
         # instance, so serialise under a lock to keep the buffer ordered.
         async with self._lock:

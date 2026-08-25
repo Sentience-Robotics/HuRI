@@ -3,7 +3,7 @@ from typing import Optional
 import numpy as np
 import webrtcvad
 
-from src.core.events import RawBytes
+from src.core.events import BytesEvent
 from src.core.module import Module
 
 from .events import Voice
@@ -50,7 +50,7 @@ class MIC(Module):
 
         self.vad = webrtcvad.Vad(vad_agressiveness)
 
-    async def process(self, data: RawBytes) -> Optional[Voice]:
+    async def process(self, data: BytesEvent) -> Optional[Voice]:
         if self.vad.is_speech(data.data, self.sample_rate) is True:
             self.silence_frames_count = 0
 

@@ -6,7 +6,6 @@ from collections import defaultdict
 from dataclasses import asdict
 from typing import Any, Dict, Generic, List, Mapping, Type, TypeVar
 
-import numpy as np
 import websockets
 
 from src.core.dataclasses.config import ClientConfig

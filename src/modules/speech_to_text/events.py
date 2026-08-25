@@ -3,17 +3,17 @@ from typing import Optional
 
 import numpy as np
 
-from src.core.events import EventData
+from src.core.events import JsonEvent
 
 
 @dataclass
-class Transcript(EventData):
+class Transcript(JsonEvent):
     text: str
     end: bool
 
 
 @dataclass
-class Voice(EventData):
+class Voice(JsonEvent):
     data: Optional[np.ndarray]
 
     def summarize(self) -> str:
