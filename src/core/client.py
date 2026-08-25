@@ -113,6 +113,13 @@ class Client:
         try:
             while True:
                 msg = await ws.recv()
+                if isinstance(msg, bytes):
+                    if len(msg) < 2:
+                        print(f"<< bytes ({len(msg)}B, no topic)")
+                        continue
+                    (topic_len,) = struct.unpack(">H", msg[:2])
+                    topic = msg[2 : 2 + topic_len].decode()
+                    payload = msg[2 + topic_len :]
 
                 if isinstance(msg, bytes):
                     topic_len = struct.unpack(">H", msg[:2])[0]

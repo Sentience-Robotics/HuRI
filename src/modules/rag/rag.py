@@ -426,9 +426,7 @@ class RAGHandle:
             vec = await self._embed(merged)
             vector_size = len(vec)
             now = datetime.now().isoformat()
-            imp = min(
-                max((p.payload or {}).get("importance", 3) for p in weak) + 1, 10
-            )
+            imp = min(max((p.payload or {}).get("importance", 3) for p in weak) + 1, 10)
             self._qdrant.upsert(
                 collection_name=self._cfg.memory_collection,
                 points=[
@@ -580,7 +578,7 @@ class RAGHandle:
         # slot for a formatting rule. open-mistral-nemo skips the persona-level
         # no-Ah/Oh rule often enough that we restate it right at the tail.
         user_prompt += (
-            '\n\nStart your answer straight on the substance — do not open with '
+            "\n\nStart your answer straight on the substance — do not open with "
             '"Ah" or "Oh".'
         )
 

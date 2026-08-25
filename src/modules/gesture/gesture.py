@@ -88,19 +88,27 @@ class GestureDeployment:
         print("[Gesture] loading upper_vq...")
         upper_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/upper"
-        ).to(self.device)  # type: ignore[arg-type]
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
         print("[Gesture] loading lower_vq...")
         lower_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/lower"
-        ).to(self.device)  # type: ignore[arg-type]
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
         print("[Gesture] loading hands_vq...")
         hands_vq = EmageVQVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/hands"
-        ).to(self.device)  # type: ignore[arg-type]
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
         print("[Gesture] loading global_ae...")
         global_ae = EmageVAEConv.from_pretrained(
             hf_repo, subfolder="emage_vq/global"
-        ).to(self.device)  # type: ignore[arg-type]
+        ).to(
+            self.device
+        )  # type: ignore[arg-type]
 
         self.motion_vq = EmageVQModel(
             face_model=face_vq,
