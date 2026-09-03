@@ -1142,8 +1142,9 @@ PY
       ok "voice sample present at $ASSETS_DIR/voice.wav"
     else
       warn "no $ASSETS_DIR/voice.wav — TTS will start but zero-shot synthesis needs it."
-      note "Add one with: scripts/install_local.sh --only config \\"
+      note "Add one with: scripts/install_local.sh --only models,config \\"
       note "    --voice-sample /path/to/voice.wav --voice-transcript 'exact words spoken'"
+      note "(--only config alone will NOT copy the file — 'models' is the stage that does)"
     fi
   fi
   ok "models ready"
@@ -1757,6 +1758,22 @@ PY
     else
       err "CosyVoice3 import failed (check $ASSETS_DIR/cosyvoice submodules)"; failures=1
     fi
+
+    # Unlike the Kubernetes deploy (where the voice sample PVC is deliberately
+    # populated *after* first install, via `kubectl cp`), a bare-metal install
+    # has no later provisioning step: if the file is not here now, it never
+    # will be, and every TTS session will fail per-request (each error is
+    # logged but swallowed by the event graph, so the client just gets no
+    # audio — see src/core/events.py::EventGraph._run). Treat it as a hard
+    # requirement rather than the best-effort skip TTSDeployment allows.
+    if [[ -f "$ASSETS_DIR/voice.wav" ]]; then
+      ok "voice sample present at $ASSETS_DIR/voice.wav"
+    else
+      err "no $ASSETS_DIR/voice.wav — TTS is enabled but has no reference voice"
+      note "Add one with: scripts/install_local.sh --only models,config \\"
+      note "    --voice-sample /path/to/voice.wav --voice-transcript 'exact words spoken'"
+      failures=1
+    fi
   fi
 
   if [[ "$P_GES_DEV" != "off" ]]; then
@@ -1836,7 +1853,7 @@ main() {
   download_models
   install_services
   generate_configs
-  verify || warn "verification reported problems — see above"
+  verify || die "verification failed — see the ✗ lines above, fix them, then re-run (e.g. with --only <stage>)"
 
   step "Done"
   cat <<EOF
