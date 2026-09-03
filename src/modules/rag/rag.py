@@ -51,7 +51,10 @@ class RAGDeploymentConfig(BaseModel):
     llm_provider: str = "ollama"  # "vllm", "ollama", "api"
     llm_url: str = "http://localhost:11434"
     llm_model: str = "mistral:7b"
-    llm_api_key: str = ""
+    # Defaults to HURI_LLM_API_KEY so a bearer token can be injected through the
+    # replica's environment instead of being written into the Serve config's
+    # user_config (which lives on disk). An explicit user_config value wins.
+    llm_api_key: str = os.environ.get("HURI_LLM_API_KEY", "")
     verify_ssl: bool = True
     top_k: int = 5
     score_threshold: float = 0.5
