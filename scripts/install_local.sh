@@ -461,6 +461,13 @@ report_detection() {
       "${GPU_DRIVER:+, driver $GPU_DRIVER}"
   fi
   printf '    %-14s %s\n' "python" "${PY_BIN:-<none suitable>} ${PY_VERSION:+($PY_VERSION)}"
+  compute_system_packages
+  if [[ -n "$PKG_MGR" ]]; then
+    printf '    %-14s %s\n' "pkg manager" "$PKG_MGR"
+    printf '    %-14s %s\n' "packages" "${SYS_PKGS[*]:-<none>}"
+  else
+    printf '    %-14s %s\n' "pkg manager" "${C_Y}none detected${C_RST} — install a C toolchain, ffmpeg, libsndfile and portaudio yourself"
+  fi
   printf '    %-14s %s\n' "container" "${HAS_DOCKER:-none}"
   printf '    %-14s %s\n' "ollama" "$( ((HAS_OLLAMA)) && echo installed || echo 'not installed')"
 
@@ -881,29 +888,42 @@ EOF
 # 3. Stage: system packages
 # =============================================================================
 
-install_system_packages() {
-  stage_enabled system || return 0
-  (( SKIP_SYSTEM )) && { note "system packages skipped (--skip-system)"; return 0; }
-  step "System packages"
+SYS_PKGS=()
 
-  # webrtcvad compiles from source (needs a toolchain + Python headers),
-  # sounddevice dlopens libportaudio, soundfile needs libsndfile, and
-  # librosa/openai-whisper shell out to ffmpeg.
-  local pkgs=()
+# compute_system_packages — fills the global SYS_PKGS array for $PKG_MGR.
+# Called during detection (to display the plan) and again before installing.
+#
+# webrtcvad compiles from source (needs a toolchain + Python headers),
+# sounddevice dlopens libportaudio, soundfile needs libsndfile, and
+# librosa/openai-whisper shell out to ffmpeg.
+compute_system_packages() {
+  SYS_PKGS=()
   case "$PKG_MGR" in
-    apt)    pkgs=(build-essential git curl ca-certificates pkg-config unzip
+    apt)    SYS_PKGS=(build-essential git curl ca-certificates pkg-config unzip
                   ffmpeg libsndfile1 libportaudio2 python3-dev) ;;
-    dnf)    pkgs=(gcc gcc-c++ make git curl unzip ffmpeg-free libsndfile portaudio python3-devel) ;;
-    pacman) pkgs=(base-devel git curl unzip ffmpeg libsndfile portaudio) ;;
-    zypper) pkgs=(gcc gcc-c++ make git curl unzip ffmpeg libsndfile1 portaudio python3-devel) ;;
-    *)      warn "unknown package manager — install a C toolchain, ffmpeg, libsndfile and portaudio yourself"
-            return 0 ;;
+    dnf)    SYS_PKGS=(gcc gcc-c++ make git curl unzip ffmpeg-free libsndfile portaudio python3-devel) ;;
+    pacman) SYS_PKGS=(base-devel git curl unzip ffmpeg libsndfile portaudio) ;;
+    zypper) SYS_PKGS=(gcc gcc-c++ make git curl unzip ffmpeg libsndfile1 portaudio python3-devel) ;;
+    *)      return 0 ;;
   esac
 
   # Ubuntu/Debian: creating a venv from the *system* python also needs the
   # matching python3.X-venv package (pyenv/uv interpreters ship it already).
   if [[ "$PKG_MGR" == "apt" && "$PY_BIN" == /usr/bin/* ]]; then
-    pkgs+=("python$(cut -d. -f1,2 <<<"$PY_VERSION")-venv")
+    SYS_PKGS+=("python$(cut -d. -f1,2 <<<"$PY_VERSION")-venv")
+  fi
+}
+
+install_system_packages() {
+  stage_enabled system || return 0
+  (( SKIP_SYSTEM )) && { note "system packages skipped (--skip-system)"; return 0; }
+  step "System packages"
+
+  compute_system_packages
+  local pkgs=("${SYS_PKGS[@]}")
+  if [[ -z "$PKG_MGR" ]]; then
+    warn "unknown package manager — install a C toolchain, ffmpeg, libsndfile and portaudio yourself"
+    return 0
   fi
 
   local sudo_cmd=""
@@ -1828,10 +1848,23 @@ main() {
   detect_host
   detect_gpu
   detect_tools
-  if ! detect_python; then
-    die "no suitable Python found (need 3.10–3.12; pass --python /path/to/python3.12)"
-  fi
+  local py_ok=1
+  detect_python || py_ok=0
   report_detection
+
+  if (( ! py_ok )); then
+    echo
+    if [[ "$PKG_MGR" == "pacman" ]]; then
+      err "no suitable Python found (need 3.10–3.12)"
+      note "Arch/EndeavourOS only ship the current python via pacman, which is usually"
+      note "newer than 3.12 — there is no 3.10–3.12 package in the official repos."
+      note "Install one via pyenv/uv, or the AUR (e.g. 'yay -S python312'), then re-run"
+      note "with --python /path/to/python3.12"
+      die "no suitable Python found"
+    else
+      die "no suitable Python found (need 3.10–3.12; pass --python /path/to/python3.12)"
+    fi
+  fi
 
   resolve_endpoints
   plan
