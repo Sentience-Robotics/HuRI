@@ -74,6 +74,12 @@ ray:
               llm_provider: "vllm"
               llm_model: "Qwen3.5-4B-GGUF"
               verify_ssl: false
+              # Widened from the 3-attempt/1s-base default (~3s total) so a
+              # single dropped packet on the LAN to *.huri.lan doesn't surface
+              # as a user-facing error — see incident 2026-09-03 19:28:50.
+              embed_retries: 5
+              llm_retries: 5
+              retry_base_delay: 1.5
           # GPU split (manual override knob): TTS and Gesture share one NVIDIA
           # GPU. num_gpus/resources are Ray *scheduling* fractions — they let
           # both replicas pack onto the same device and bias the split. Audio

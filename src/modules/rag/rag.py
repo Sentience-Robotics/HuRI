@@ -25,6 +25,15 @@ from src.modules.text_to_speech.events import Token
 from .events import RAGQuestion
 from .qdrant_utils import make_qdrant_client
 
+# Transient failures worth retrying: the embedding/LLM endpoints are on the
+# local network and occasionally blip (container restart, proxy reload).
+_RETRIABLE_EXC = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
+
 # Reserved _user_id for documents visible to EVERY user (e.g. the HuRI project
 # overview). Retrieval matches the querying user's own id OR this shared id, so
 # one ingested copy is reachable by all sessions. Ingest global docs with
@@ -51,10 +60,19 @@ class RAGDeploymentConfig(BaseModel):
     llm_provider: str = "ollama"  # "vllm", "ollama", "api"
     llm_url: str = "http://localhost:11434"
     llm_model: str = "mistral:7b"
-    llm_api_key: str = ""
+    # Defaults to HURI_LLM_API_KEY so a bearer token can be injected through the
+    # replica's environment instead of being written into the Serve config's
+    # user_config (which lives on disk). An explicit user_config value wins.
+    llm_api_key: str = os.environ.get("HURI_LLM_API_KEY", "")
     verify_ssl: bool = True
     top_k: int = 5
     score_threshold: float = 0.5
+
+    # Retries for transient embedding/LLM connection failures (exponential
+    # backoff: retry_base_delay * 2**attempt).
+    embed_retries: int = 3
+    llm_retries: int = 3
+    retry_base_delay: float = 1.0
 
     memory_collection: str = "conversations"
     memory_top_k: int = 3
@@ -112,11 +130,32 @@ class RAGHandle:
         filters = {"_user_id": _user_id}
         return collection, filters
 
+    async def _retry_on_connect_failure(self, func, *, attempts: int, what: str):
+        """Retry `func()` (a zero-arg async callable) on transient connection
+        errors, with exponential backoff. Re-raises immediately on the last
+        attempt or on any non-retriable exception."""
+        for attempt in range(1, attempts + 1):
+            try:
+                return await func()
+            except _RETRIABLE_EXC as e:
+                if attempt == attempts:
+                    raise
+                delay = self._cfg.retry_base_delay * (2 ** (attempt - 1))
+                print(
+                    f"[RAG] {what} failed (attempt {attempt}/{attempts}): "
+                    f"{e!r} — retrying in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
+
     async def _embed(self, text: str) -> list[float]:
         url = f"{self.embedding_url}/v1/embeddings"
-        resp = await self._embed_client.post(
-            url,
-            json={"model": self._cfg.embedding_model, "input": str(text)},
+        resp = await self._retry_on_connect_failure(
+            lambda: self._embed_client.post(
+                url,
+                json={"model": self._cfg.embedding_model, "input": str(text)},
+            ),
+            attempts=self._cfg.embed_retries,
+            what=f"Embedding request to {url}",
         )
         if resp.status_code != 200:
             raise RuntimeError(
@@ -587,29 +626,42 @@ class RAGHandle:
     async def _stream_ollama(
         self, messages: list, max_tokens: int, temperature: float = 0.7
     ) -> AsyncGenerator[str, None]:
-        async with self._llm_client.stream(
-            "POST",
-            f"{self._cfg.llm_url}/api/chat",
-            json={
-                "model": self._cfg.llm_model,
-                "messages": messages,
-                "stream": True,
-                "options": {"num_predict": max_tokens, "temperature": temperature},
-            },
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                delta = chunk.get("message", {}).get("content", "")
-                if delta:
-                    yield delta
-                if chunk.get("done"):
-                    return
+        url = f"{self._cfg.llm_url}/api/chat"
+        payload = {
+            "model": self._cfg.llm_model,
+            "messages": messages,
+            "stream": True,
+            "options": {"num_predict": max_tokens, "temperature": temperature},
+        }
+        attempts = self._cfg.llm_retries
+        for attempt in range(1, attempts + 1):
+            yielded_any = False
+            try:
+                async with self._llm_client.stream("POST", url, json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        delta = chunk.get("message", {}).get("content", "")
+                        if delta:
+                            yielded_any = True
+                            yield delta
+                        if chunk.get("done"):
+                            return
+                return
+            except _RETRIABLE_EXC as e:
+                if yielded_any or attempt == attempts:
+                    raise
+                delay = self._cfg.retry_base_delay * (2 ** (attempt - 1))
+                print(
+                    f"[RAG] LLM stream connect to {url} failed "
+                    f"(attempt {attempt}/{attempts}): {e!r} — retrying in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
 
     async def _stream_openai_compatible(
         self,
@@ -622,34 +674,49 @@ class RAGHandle:
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        async with self._llm_client.stream(
-            "POST",
-            url,
-            headers=headers,
-            json={
-                "model": self._cfg.llm_model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "stream": True,
-            },
-        ) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                payload = line[len("data:") :].strip()
-                if payload == "[DONE]":
-                    return
-                try:
-                    chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                delta = (
-                    chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+        body = {
+            "model": self._cfg.llm_model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        attempts = self._cfg.llm_retries
+        for attempt in range(1, attempts + 1):
+            yielded_any = False
+            try:
+                async with self._llm_client.stream(
+                    "POST", url, headers=headers, json=body
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[len("data:") :].strip()
+                        if data == "[DONE]":
+                            return
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        delta = (
+                            chunk.get("choices", [{}])[0]
+                            .get("delta", {})
+                            .get("content", "")
+                        )
+                        if delta:
+                            yielded_any = True
+                            yield delta
+                return
+            except _RETRIABLE_EXC as e:
+                if yielded_any or attempt == attempts:
+                    raise
+                delay = self._cfg.retry_base_delay * (2 ** (attempt - 1))
+                print(
+                    f"[RAG] LLM stream connect to {url} failed "
+                    f"(attempt {attempt}/{attempts}): {e!r} — retrying in {delay:.1f}s"
                 )
-                if delta:
-                    yield delta
+                await asyncio.sleep(delay)
 
     async def _llm_stream(
         self,
@@ -693,7 +760,11 @@ class RAGHandle:
         print(f"[RAG] Question: {query.question}")
 
         collection, filters = self._resolve_user_context(query._user_id)
-        query_vector = await self._embed(query.question)
+        try:
+            query_vector = await self._embed(query.question)
+        except Exception:
+            print(f"[RAG] FAILED during embedding:\n{traceback.format_exc()}")
+            raise
 
         try:
             chunks = self._search(self._qdrant, query_vector, collection, filters)
