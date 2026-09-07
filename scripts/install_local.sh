@@ -1442,11 +1442,10 @@ EOF
     echo "huri_url: ws://localhost:8000/session"
     echo "interface_path: src.interfaces.cli_interface:cli_interface"
     echo
-    echo "topic_list: [transcript, question, token$([[ $P_GES_DEV != off ]] && echo ', motion')]"
-    echo
     echo "senders:"
     echo "  audio:"
     echo "    name: audio"
+    echo "    topic: audio.in"
     echo "    args:"
     echo "      sample_rate: 16000"
     echo "      frame_duration: 0.030"
@@ -1464,10 +1463,15 @@ EOF
     if [[ "$P_TTS_DEV" != "off" ]]; then
       echo "  audio:"
       echo "    name: audio"
-      echo "    topics: [audio]"
+      echo "    topics: [audio.out]"
       echo "    args:"
       echo "      incoming_sample_rate: \${senders.audio.args.sample_rate}"
       echo "      sample_rate: 44100"
+    fi
+    if [[ "$P_GES_DEV" != "off" ]]; then
+      echo "  motion:"
+      echo "    name: motion"
+      echo "    topics: [motion]"
     fi
     echo
     echo "modules:"

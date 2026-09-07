@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import json
 import struct
+import traceback
 from collections import defaultdict
 from dataclasses import asdict
 from typing import Any, Dict, Generic, List, Mapping, Type, TypeVar
@@ -112,6 +113,21 @@ class Client:
                     )
                 )
 
+    @staticmethod
+    def _log_hook_error(task: "asyncio.Task") -> None:
+        """Surface hook failures.
+
+        Hooks are fired as detached tasks, so an exception inside one is only
+        reported by asyncio's "never retrieved" warning at GC — long after the
+        fact, if at all. That is why a hook crashing on every chunk looks
+        identical to a stream that was never sent.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+
     async def _receive_loop(self, ws: websockets.ClientConnection):
         try:
             while True:
@@ -129,12 +145,14 @@ class Client:
                     data = event["data"]
 
                 for hook in self.hooks[topic]:
-                    hook_data = (
-                        data
-                        if isinstance(data, bytes)
-                        else hook.input_type.from_wire(data)
-                    )
-                    asyncio.create_task(hook.hook(hook_data))
+                    # `from_wire` is the deserialization contract for BOTH wire
+                    # shapes — Audio/Motion decode bytes, JsonEvent decodes the
+                    # mapping. Handing binary topics the raw bytes instead left
+                    # every hook typed for a bytes event (audio, motion)
+                    # receiving a `bytes` and failing on attribute access.
+                    hook_data = hook.input_type.from_wire(data)
+                    task = asyncio.create_task(hook.hook(hook_data))
+                    task.add_done_callback(self._log_hook_error)
 
         except (asyncio.CancelledError, websockets.ConnectionClosedOK):
             pass

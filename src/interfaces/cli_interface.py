@@ -13,6 +13,7 @@ from scipy.signal import resample
 from src.core.client import ClientHook, ClientSender
 from src.core.events import BytesEvent
 from src.core.interface import Interface
+from src.modules.gesture.events import Motion
 from src.modules.rag.events import RAGQuestion
 from src.modules.speech_to_text.events import Transcript
 from src.modules.text_to_speech.events import Audio, Token
@@ -193,6 +194,19 @@ class TokenHook(ClientHook[Token]):
             print(data.text, end="", flush=True)
 
 
+class MotionHook(ClientHook[Motion]):
+    input_type = Motion
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    async def hook(self, data: Motion):
+        print(
+            f"<< motion: pts={data.pts:.3f}s "
+            f"frames={data.poses.shape[0]} @ {data.fps}fps"
+        )
+
+
 class CLIInterface(Interface):
     def __init__(self):
         super().__init__(singletton=None)
@@ -201,7 +215,12 @@ class CLIInterface(Interface):
         return {"audio": AudioSender, "text": TextSender}
 
     def get_hooks(self) -> Dict[str, Type[ClientHook]]:
-        return {"audio": AudioHook, "text": TextHook, "token": TokenHook}
+        return {
+            "audio": AudioHook,
+            "text": TextHook,
+            "token": TokenHook,
+            "motion": MotionHook,
+        }
 
 
 cli_interface = CLIInterface()

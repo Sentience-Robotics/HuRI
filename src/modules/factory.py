@@ -23,6 +23,9 @@ class EventDataFactory:
 
         self._registry[topic] = event_cls
 
+    def topics(self) -> List[str]:
+        return sorted(self._registry)
+
     def create(self, topic: str, data: Mapping[str, Any]) -> EventData:
         if topic not in self._registry:
             raise RuntimeError(f"unknown event topic {topic}")
