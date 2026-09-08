@@ -19,7 +19,7 @@ class Voice(JsonEvent):
     def summarize(self) -> str:
         """Short repr that avoids dumping full numpy arrays into the log."""
 
-        if self.data:
+        if self.data is not None:
             cls = type(self).__name__
             return f"{cls}(shape={self.data.shape}, dtype={self.data.dtype})"
         else:

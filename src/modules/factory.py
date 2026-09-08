@@ -54,6 +54,13 @@ class ModuleFactory:
                 )
         self._registry[name] = module_cls
 
+    def available(self) -> List[str]:
+        """Names of the modules actually registered on this running instance
+        (post HURI_MODULES filtering, see src/modules/modules.py) — what a
+        client can validly ask for, as opposed to every name HuRI's code
+        knows how to build."""
+        return sorted(self._registry)
+
     def create(
         self, user_id: str, name: str, args: Mapping[str, Any] | None = None
     ) -> Module:

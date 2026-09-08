@@ -60,6 +60,15 @@ class HuRI:
                 f"Subscribable topics: {sorted(produced)}"
             )
 
+    @app.get("/modules")
+    async def list_modules(self) -> Dict[str, List[str]]:
+        """Modules this running instance actually has deployed, after
+        HURI_MODULES filtering (see src/modules/modules.py) — lets a
+        client-side config UI (e.g. the website's Event Configuration modal)
+        offer only combinations that will actually work, instead of a session
+        failing at handshake time because e.g. no GPU means no "tts"."""
+        return {"modules": self.module_factory.available()}
+
     @app.websocket("/session")
     async def run_session(self, ws: WebSocket):
         """
@@ -95,9 +104,15 @@ class HuRI:
             for hook_config in client_config.hooks.values()
             for topic in hook_config.topics
         ]
-        pipeline: List[Module] = self.module_factory.create_from_config(
-            client_config.user_id, client_config.modules
-        )
+        try:
+            pipeline: List[Module] = self.module_factory.create_from_config(
+                client_config.user_id, client_config.modules
+            )
+        except Exception as e:
+            await ws.send_json({"type": "session_error", "error": str(e)})
+            await ws.close(code=1008, reason="invalid session config")
+            print(f"[HuRI] rejected session for {client_config.user_id}: {e}")
+            return
 
         try:
             self._check_subscriptions(pipeline, topic_list)

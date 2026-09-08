@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 from typing import Dict
 
-from src.core.events import EventData
+from src.core.events import JsonEvent
 
 
 @dataclass
-class Emotion(EventData):
+class Emotion(JsonEvent):
     label: str
     confidence: float
     scores: Dict[str, float]
