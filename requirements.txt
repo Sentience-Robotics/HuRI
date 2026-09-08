@@ -8,6 +8,7 @@ pytest-asyncio==1.4.0
 
 
 # server
+setuptools==81.0.0
 numpy==1.26.4
 ray[serve]==2.55.1
 webrtcvad==2.0.10
