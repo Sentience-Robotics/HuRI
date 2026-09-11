@@ -1577,6 +1577,23 @@ export HURI_STATE="$STATE_DIR"
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
+# CUDA libraries for CTranslate2 (faster-whisper's STT backend). It dlopen()s
+# "libcublas.so.12" by bare soname and declares no CUDA dependency of its own,
+# while the nvidia-*-cu12 wheels install under site-packages/nvidia/<lib>/lib —
+# a directory on no loader search path. The dlopen is lazy, so without this the
+# model loads fine and the replica dies on the FIRST transcription with
+#     RuntimeError: Library libcublas.so.12 is not found or cannot be loaded
+# The loader reads LD_LIBRARY_PATH at exec(), so this has to be exported before
+# 'ray start' for the Serve replicas to inherit it — which is why it lives here
+# and not in the Python module. deploy/Dockerfile.amd does the same for ROCm
+# with ROCM_PATH/lib; this is the CUDA half of that.
+# Silently a no-op on CPU-only and ROCm installs (no nvidia package to import).
+_huri_nv="\$(python -c 'import glob, os, nvidia; print(":".join(sorted({os.path.dirname(p) for r in nvidia.__path__ for p in glob.glob(os.path.join(r, "*", "lib", "*.so*"))})))' 2>/dev/null || true)"
+if [ -n "\$_huri_nv" ]; then
+  export LD_LIBRARY_PATH="\$_huri_nv\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+fi
+unset _huri_nv
+
 # Model paths, module allow-list, TTS/gesture tuning — the same values the
 # generated Serve config injects into every replica (regenerate both with
 # 'scripts/install_local.sh --only config').
