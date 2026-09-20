@@ -33,7 +33,7 @@ class Motion(EventData[bytes]):
             self.pts,
         )
         header = struct.pack(">dII", self.pts, self.fps, n_frames)
-        body = (
+        body: bytes = (
             self.poses.astype(np.float32).tobytes()
             + self.expressions.astype(np.float32).tobytes()
             + self.trans.astype(np.float32).tobytes()

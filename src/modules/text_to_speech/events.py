@@ -31,7 +31,7 @@ class Audio(EventData[bytes]):
             self.pts,
         )
         header = struct.pack(">IBd", self.sample_rate, int(self.end), self.pts)
-        return header + self.data.tobytes()
+        return header + bytes(self.data.tobytes())
 
     @classmethod
     def from_wire(cls, data: bytes) -> "Audio":
