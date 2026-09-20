@@ -117,6 +117,9 @@ class RAGHandle:
         self.embedding_url = cfg.embedding_url or cfg.llm_url
         self._qdrant = make_qdrant_client(cfg.qdrant_url, cfg.verify_ssl)
         print(f"[RAGHandle] Connected to Qdrant at {cfg.qdrant_url}")
+        # One-shot warning bookkeeping for _search (see there).
+        self._warned_collections: set[str] = set()
+        self._report_document_collection()
         self._embed_client = httpx.AsyncClient(timeout=30.0, verify=cfg.verify_ssl)
         self._llm_client = httpx.AsyncClient(timeout=120.0, verify=cfg.verify_ssl)
         task = self._maintenance_task
@@ -124,6 +127,45 @@ class RAGHandle:
             self._maintenance_task = asyncio.get_event_loop().create_task(
                 self._maintenance_loop()
             )
+
+    def _report_document_collection(self) -> None:
+        """Say at startup whether the document collection exists.
+
+        Unlike ``conversations`` (created on demand by
+        ``_ensure_memory_collection``), the document collection is only ever
+        written by the offline ingestion CLI. If it was never run, every
+        retrieval silently returns nothing — answers look fine, they are just
+        ungrounded. Deliberately not auto-created: an empty collection is
+        indistinguishable from "no documents ingested", so saying so is more
+        useful than manufacturing one.
+        """
+
+        collection = self._cfg.default_collection
+        try:
+            names = [c.name for c in self._qdrant.get_collections().collections]
+        except Exception as e:  # noqa: BLE001 - never block startup on this
+            print(f"[RAGHandle] WARNING: cannot list Qdrant collections: {e}")
+            print("[RAGHandle]          document retrieval will return nothing")
+            return
+
+        if collection in names:
+            try:
+                count = self._qdrant.count(collection_name=collection).count
+                print(f"[RAGHandle] documents: '{collection}' has {count} points")
+                if count == 0:
+                    print(
+                        "[RAGHandle] WARNING: it is empty — answers will not be "
+                        "grounded in any document"
+                    )
+            except Exception:  # noqa: BLE001
+                print(f"[RAGHandle] documents: '{collection}' present")
+        else:
+            print(
+                f"[RAGHandle] WARNING: no '{collection}' collection in Qdrant "
+                f"(found: {', '.join(names) or 'none'})"
+            )
+            print("[RAGHandle]          document retrieval returns nothing.")
+            print("[RAGHandle]          Ingest: python -m src.modules.rag.ingestion")
 
     def _resolve_user_context(self, _user_id: str) -> tuple[str, dict | None]:
         collection = self._cfg.default_collection
@@ -222,7 +264,15 @@ class RAGHandle:
             parts.append(d)
         return "".join(parts)
 
-    def _memory_strength(self, payload: dict, relevance: float) -> float:
+    def _recency_importance(self, payload: dict) -> tuple[float, int]:
+        """Exponential decay factor and importance for one memory point.
+
+        Shared by the two scorers below, which combine these differently:
+        `_memory_strength` takes a weighted sum including query relevance
+        (query-time re-ranking), while maintenance uses a plain product
+        (query-independent pruning). Only this computation was duplicated.
+        """
+
         importance: int = payload.get("importance", 3)
         half_life = max(self._cfg.memory_half_life_days * (importance / 5.0), 0.5)
         try:
@@ -232,7 +282,10 @@ class RAGHandle:
             age_days = (datetime.now() - last).total_seconds() / 86400.0
         except Exception:
             age_days = 0.0
-        recency: float = 0.5 ** (age_days / half_life)
+        return 0.5 ** (age_days / half_life), importance
+
+    def _memory_strength(self, payload: dict, relevance: float) -> float:
+        recency, importance = self._recency_importance(payload)
         cfg = self._cfg
         return (
             cfg.memory_w_relevance * relevance
@@ -379,8 +432,6 @@ class RAGHandle:
         )
 
     async def _maintenance_loop(self) -> None:
-        import asyncio
-
         check_secs = self._cfg.memory_maintenance_check_hours * 3600
         while True:
             try:
@@ -422,16 +473,7 @@ class RAGHandle:
 
         def base_strength(payload: dict) -> float:
             # query-independent: recency * importance
-            imp: int = payload.get("importance", 3)
-            half = max(self._cfg.memory_half_life_days * (imp / 5.0), 0.5)
-            try:
-                last = datetime.fromisoformat(
-                    payload.get("last_accessed") or payload["created_at"]
-                )
-                age = (datetime.now() - last).total_seconds() / 86400.0
-            except Exception:
-                age = 0.0
-            recency: float = 0.5 ** (age / half)
+            recency, imp = self._recency_importance(payload)
             return recency * (imp / 10.0)
 
         to_delete, weak_by_user = [], defaultdict(list)
@@ -534,7 +576,22 @@ class RAGHandle:
                 limit=self._cfg.top_k,
                 score_threshold=self._cfg.score_threshold,
             ).points
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            # Degrade to an ungrounded answer rather than failing the turn — but
+            # say so. A bare `results = []` made "collection does not exist",
+            # "Qdrant is down" and "nothing matched" indistinguishable, which is
+            # how a RAG deployment can look healthy while retrieving nothing at
+            # all. Warned once per collection, since this runs per question.
+            if collection not in self._warned_collections:
+                self._warned_collections.add(collection)
+                print(
+                    f"[RAGHandle] WARNING: search on '{collection}' failed — "
+                    f"{type(e).__name__}: {e}"
+                )
+                print(
+                    "[RAGHandle]          answering without document context "
+                    "from now on (logged once)"
+                )
             results = []
         return [
             {
@@ -883,9 +940,6 @@ class RAG(ModuleWithHandle, ModuleWithId):
         max_msgs = self._max_history_turns * 2
         if len(self.history) > max_msgs:
             del self.history[:-max_msgs]
-
-    def update_preferences(self, new_preferences: dict):
-        self.preferences.update(new_preferences)
 
     async def finalize(self) -> None:
         """Called when the session ends — persist this conversation as a memory."""

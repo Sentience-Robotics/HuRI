@@ -76,7 +76,12 @@ class AudioHook(ClientHook[Audio]):
 
     def __init__(
         self,
-        save_audio_dir: str,
+        # Defaulted, because the body already treats it as optional ("" = do
+        # not save). Hooks are constructed as available_hooks[name](**hook.args)
+        # from the yaml, so a required parameter here is a hard TypeError at
+        # client startup for every config that omits the key — which was all of
+        # them except client_text.yaml.
+        save_audio_dir: str = "",
         sample_rate=48000,
         incoming_sample_rate=16000,
         **kwargs,
@@ -93,10 +98,10 @@ class AudioHook(ClientHook[Audio]):
             dtype="int16",
         )
         self.stream.start()
-
-        self.resample_function = (
-            self._resample if sample_rate != incoming_sample_rate else lambda x: x
-        )
+        # Rate the device is actually running at, and whether we had to give up
+        # on reopening it and resample instead. See _ensure_stream_for.
+        self._stream_sr = sample_rate
+        self._resample_fallback = False
 
         # When set, incoming audio chunks are buffered per utterance and written
         # to a .wav under this directory each time an end-of-utterance marker
@@ -108,11 +113,50 @@ class AudioHook(ClientHook[Audio]):
         if save_audio_dir:
             os.makedirs(save_audio_dir, exist_ok=True)
 
-    def _resample(self, audio: np.ndarray):
-        return resample(
-            audio,
-            int(len(audio) * self.sample_rate / self.incoming_sample_rate),
-        ).astype(np.int16)
+    def _resample(self, audio: np.ndarray) -> np.ndarray:
+        """Resample float32 audio to the output device's rate.
+
+        Kept in float: quantising to int16 first (as this used to) throws away
+        headroom before the filter runs.
+        """
+        # np.asarray(): scipy.signal.resample is untyped, so it returns Any.
+        return np.asarray(
+            resample(
+                audio,
+                int(len(audio) * self.sample_rate / self.incoming_sample_rate),
+            ),
+            dtype=np.float32,
+        )
+
+    def _ensure_stream_for(self, sample_rate: int) -> None:
+        """Run the output device at the TTS rate when it can.
+
+        `scipy.signal.resample` is FFT-based and stateless, so resampling each
+        chunk independently produces a discontinuity — an audible click — at
+        every chunk boundary. Playing at the source rate avoids that entirely.
+        Falls back to per-chunk resampling if the device rejects the rate.
+        """
+        if sample_rate == self._stream_sr or self._resample_fallback:
+            return
+        try:
+            stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16")
+            stream.start()
+        except Exception as e:  # noqa: BLE001 - device capability probe
+            print(
+                f"** output device will not run at {sample_rate}Hz ({e}); "
+                f"resampling to {self.sample_rate}Hz instead (expect chunk clicks)"
+            )
+            self._resample_fallback = True
+            return
+        if self.stream is not None:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self.stream = stream
+        self._stream_sr = sample_rate
+        print(f"** audio output reopened at {sample_rate}Hz")
 
     def _collect_audio(self, samples: np.ndarray, sample_rate: int, end: bool) -> None:
         if samples.size:
@@ -155,10 +199,24 @@ class AudioHook(ClientHook[Audio]):
             f"samples={data.data.size} @ {data.sample_rate}Hz "
             f"end={bool(data.end)}"
         )
-        # audio = np.frombuffer(data, dtype=np.int16)
-
-        # audio = self.resample_function(audio)
-        # self.stream.write(audio.reshape(-1, 1))
+        # Play it. `data.data` is already a float32 ndarray in [-1, 1] — see
+        # Audio.from_wire. The previous (commented-out) attempt did
+        # `np.frombuffer(data, dtype=np.int16)`, which predates from_wire() and
+        # would raise: `data` is an Audio event, not raw int16 bytes.
+        samples = np.asarray(data.data, dtype=np.float32)
+        if samples.size:
+            # The yaml seeds incoming_sample_rate from the *microphone* rate,
+            # but TTS streams at its own — adopt the real one or everything
+            # plays at the wrong pitch.
+            self.incoming_sample_rate = data.sample_rate
+            self._ensure_stream_for(data.sample_rate)
+            if self._stream_sr != data.sample_rate:
+                samples = self._resample(samples)
+            pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype(np.int16)
+            try:
+                self.stream.write(pcm.reshape(-1, 1))
+            except Exception as e:  # noqa: BLE001 - never kill the session on audio
+                print(f"** audio playback failed: {type(e).__name__}: {e}")
 
         if self.save_audio_dir:
             self._collect_audio(data.data, data.sample_rate, bool(data.end))

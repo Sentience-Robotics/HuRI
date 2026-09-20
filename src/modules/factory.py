@@ -54,6 +54,13 @@ class ModuleFactory:
                 )
         self._registry[name] = module_cls
 
+    def registered(self) -> List[str]:
+        """Module names this server can build, i.e. the HURI_MODULES allow-list
+        after filtering. Sent to a client whose session was rejected so the
+        mismatch is visible instead of having to be guessed."""
+
+        return sorted(self._registry)
+
     def create(
         self, user_id: str, name: str, args: Mapping[str, Any] | None = None
     ) -> Module:
