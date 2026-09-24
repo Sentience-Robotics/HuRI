@@ -3,12 +3,12 @@ huri_url: ws://localhost:8000/session
 interface_path: src.interfaces.cli_interface:cli_interface
 
 senders:
-  # audio:
-  #   name: audio
-  #   topic: audio.in
-  #   args:
-  #     sample_rate: 16000
-  #     frame_duration: 0.030
+  audio:
+    name: audio
+    topic: audio.in
+    args:
+      sample_rate: 16000
+      frame_duration: 0.030
   text:
     name: text
     topic: question
@@ -50,13 +50,11 @@ modules:
     logging: INFO
   tag:
     name: tag
-    args:
-      min_prefix: 3
     logging: INFO
   emo:
     name: emo
     args:
-      block_duration: 0.030
+      block_duration: ${senders.audio.args.frame_duration}
   eag:
     name: eag
   qag:
