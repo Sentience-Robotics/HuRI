@@ -1,6 +1,4 @@
 import asyncio
-import sys
-import types
 
 import numpy as np
 import pytest
@@ -12,15 +10,27 @@ from src.modules.speech_to_text.text_aggregator import TAG
 @pytest.mark.parametrize(
     "current,new,expected",
     [
-        ("what is the weather", "the weather like in Paris today",
-         "what is the weather like in Paris today"),
+        (
+            "what is the weather",
+            "the weather like in Paris today",
+            "what is the weather like in Paris today",
+        ),
         # No overlap must never corrupt/replace the sentence.
-        ("what is the weather like", "in Paris today",
-         "what is the weather like in Paris today"),
-        ("What is the weather like.", "weather like in Paris today?",
-         "What is the weather like in Paris today?"),
-        ("I want to book a table for two", "for two people at eight",
-         "I want to book a table for two people at eight"),
+        (
+            "what is the weather like",
+            "in Paris today",
+            "what is the weather like in Paris today",
+        ),
+        (
+            "What is the weather like.",
+            "weather like in Paris today?",
+            "What is the weather like in Paris today?",
+        ),
+        (
+            "I want to book a table for two",
+            "for two people at eight",
+            "I want to book a table for two people at eight",
+        ),
         ("it is a very very", "very very long day", "it is a very very long day"),
         # Word cut by the window edge.
         ("what is the weath", "weather like", "what is the weather like"),
@@ -102,7 +112,10 @@ def test_end_event_during_inflight_transcription_is_not_lost():
         gate.set()
         out = await first
         # STT does not merge: one Transcript per pass, in order.
-        assert out == [Transcript("what is the", False), Transcript("the weather", True)]
+        assert out == [
+            Transcript("what is the", False),
+            Transcript("the weather", True),
+        ]
         # ...TAG stitches them.
         tag = TAG()
         question = None

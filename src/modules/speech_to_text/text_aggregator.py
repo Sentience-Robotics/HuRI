@@ -66,7 +66,9 @@ class TAG(Module):
             return current.strip()
 
         for k in range(min(len(cur_words), len(new_words)), 0, -1):
-            if all(self._same_word(a, b) for a, b in zip(cur_words[-k:], new_words[:k])):
+            if all(
+                self._same_word(a, b) for a, b in zip(cur_words[-k:], new_words[:k])
+            ):
                 # Keep the newer spelling of the overlap (more audio context).
                 return " ".join(cur_words[:-k] + new_words)
         return " ".join(cur_words + new_words)
