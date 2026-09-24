@@ -36,27 +36,22 @@ hooks:
     topics: [motion]
 
 modules:
-  # mic:
-  #   name: mic
-  #   args:
-  #     vad_agressiveness: 3
-  #     silence_duration: 1.5
-  #     block_duration: ${senders.audio.args.frame_duration}
-  # stt:
-  #   name: stt
-  #   args:
-  #     language: en
-  #     block_duration: ${senders.audio.args.frame_duration}
-  # tag:
-  #   name: tag
+  mic:
+    name: mic
+    args:
+      vad_agressiveness: 3
+      silence_duration: 1.5
+      block_duration: ${senders.audio.args.frame_duration}
   stt:
     name: stt
     args:
-      language: "en"
-      block_duration: 0.030
+      language: en
+      block_duration: ${senders.audio.args.frame_duration}
     logging: INFO
   tag:
     name: tag
+    args:
+      min_prefix: 3
     logging: INFO
   emo:
     name: emo

@@ -2087,6 +2087,8 @@ EOF
     echo "    logging: INFO"
     echo "  tag:"
     echo "    name: tag"
+    echo "    args:"
+    echo "      min_prefix: 3"
     echo "    logging: INFO"
     if [[ "$P_EMO_DEV" != "off" ]]; then
       echo "  emo:"
