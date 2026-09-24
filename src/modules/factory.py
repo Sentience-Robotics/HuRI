@@ -9,9 +9,9 @@ from src.core.module import Module, ModuleWithHandle, ModuleWithId
 
 class EventDataFactory:
     def __init__(self):
-        self._registry: Dict[str, Type[EventData | bytes]] = {}
+        self._registry: Dict[str, Type[EventData]] = {}
 
-    def register(self, topic: str, event_cls: Type[EventData | bytes] | None) -> None:
+    def register(self, topic: str, event_cls: Type[EventData] | None) -> None:
         if topic in self._registry:
             if event_cls is None or event_cls == self._registry[topic]:
                 return
@@ -23,23 +23,19 @@ class EventDataFactory:
 
         self._registry[topic] = event_cls
 
-    def create(self, topic: str, data: Mapping[str, Any] | bytes) -> EventData | bytes:
+    def topics(self) -> List[str]:
+        return sorted(self._registry)
+
+    def create(self, topic: str, data: Mapping[str, Any]) -> EventData:
         if topic not in self._registry:
             raise RuntimeError(f"unknown event topic {topic}")
 
         event_cls = self._registry[topic]
-        if isinstance(data, bytes):
-            if issubclass(event_cls, bytes):
-                return data
-            else:
-                raise RuntimeError(f"mismatched event data type: \
-{event_cls} is not type bytes but should be.")
 
+        if issubclass(event_cls, EventData):
+            return event_cls.from_wire(data)
         else:
-            if issubclass(event_cls, EventData):
-                return event_cls.from_wire(data)
-            else:
-                raise RuntimeError(f"mismatched event data type: \
+            raise RuntimeError(f"mismatched event data type: \
 {event_cls} is not derived from EventData but should be.")
 
 

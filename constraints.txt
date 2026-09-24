@@ -10,3 +10,17 @@
 # google-api-core / googleapis-common-protos / proto-plus / opentelemetry-proto /
 # google-cloud-storage, so it satisfies the whole dependency graph.
 protobuf==4.25.8
+
+# fastapi: Ray Serve's @serve.ingress does pickle_dumps(app) to check the ASGI
+# app is serializable. FastAPI 0.139.2 added a threading.Lock to its internal
+# route-cache dataclass, so that check now fails with
+#   TypeError: cannot pickle '_thread.lock' object
+# on every FastAPI app, even a bare one. No fix released yet.
+# https://github.com/ray-project/ray/issues/64939
+fastapi<0.139.2
+
+# setuptools: pkg_resources was removed outright in setuptools 82.0.0
+# (2026-02-08). webrtcvad==2.0.10 still does `import pkg_resources` at import
+# time, so anything newer breaks STT startup with
+#   ModuleNotFoundError: No module named 'pkg_resources'
+setuptools<82

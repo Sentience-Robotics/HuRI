@@ -1,10 +1,9 @@
 huri_url: ws://localhost:8000/session
 
-topic_list: [transcript, question, token, motion]
-
 senders:
   audio:
     name: audio
+    topic: audio.in
     args:
       sample_rate: 16000
       frame_duration: 0.030
@@ -18,10 +17,13 @@ senders:
 hooks:
   audio:
     name: audio
-    topics: [audio]
+    topics: [audio.out]
     args:
       incoming_sample_rate: ${senders.audio.args.sample_rate}
       sample_rate: 44100
+  motion:
+    name: motion
+    topics: [motion]
 
 modules:
   mic:
