@@ -50,6 +50,8 @@ modules:
     logging: INFO
   tag:
     name: tag
+    args:
+      min_prefix: 3
     logging: INFO
   emo:
     name: emo
