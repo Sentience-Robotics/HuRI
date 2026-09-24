@@ -72,17 +72,24 @@ KNOWN_MODULES = {"mic", "stt", "tag", "emo", "eag", "qag", "rag", "tts", "gestur
 # for display is the aggregated, utterance-final read QAG links onto
 # RAGQuestion.emotion, already carried by the "question" hook below — so
 # there is exactly one path emotion data reaches the browser through.
+#
+# "stt" -> "transcript" is the live view of what STT hears: partial texts while
+# the user talks (end=False) and the whole-utterance final (end=True). The
+# final also reaches the browser as the "question" once QAG links its emotion,
+# so this hook is for feedback and debugging, not for the chat itself.
 _HOOK_TOPIC_BY_PRODUCER = {
     "rag": ("token", "token"),
     "tts": ("audio", "audio.out"),
     "gesture": ("motion", "motion"),
     "qag": ("question", "question"),
+    "stt": ("transcript", "transcript"),
 }
 _HOOK_NAME_BY_TOPIC = {
     "token": "web_token",
     "audio.out": "web_audio",
     "motion": "web_motion",
     "question": "web_question",
+    "transcript": "web_transcript",
 }
 
 
@@ -119,7 +126,12 @@ _current_bridge: "contextvars.ContextVar[Optional[BrowserBridge]]" = (
 
 class WebAudioSender(ClientSender[BytesEvent]):
     """Relays raw mic PCM frames the browser already captured (HuRI/ATP.xlsx
-    F5/F6 — voice activity detection and transcription)."""
+    F5/F6 — voice activity detection and transcription).
+
+    An EMPTY frame is the end-of-speech marker: the browser closed its mic, so
+    MIC must close the turn now instead of waiting for a silence that will
+    never be streamed (``MIC.flush`` in microphone_vad.py). It rides the same
+    topic as the audio so it can never overtake the frames it terminates."""
 
     output_type = BytesEvent
 
@@ -240,6 +252,18 @@ class WebQuestionHook(ClientHook[RAGQuestion]):
         )
 
 
+class WebTranscriptHook(ClientHook[Transcript]):
+    """Live transcription feedback: STT's sliding-window partials (end=False)
+    and the whole-utterance final (end=True)."""
+
+    input_type = Transcript
+
+    async def hook(self, data: Transcript):
+        await self.singletton.send(
+            {"type": "transcript", "text": data.text, "end": bool(data.end)}
+        )
+
+
 class WebInterface(Interface):
     """Browser-facing Interface. See module docstring for the ContextVar
     mechanism behind ``singletton``."""
@@ -271,6 +295,7 @@ class WebInterface(Interface):
             "web_audio": WebAudioHook,
             "web_motion": WebMotionHook,
             "web_question": WebQuestionHook,
+            "web_transcript": WebTranscriptHook,
         }
 
 
@@ -370,30 +395,55 @@ async def _pump_outbound(
         await ws.send_json(payload)
 
 
+# What the browser sends when it closes its microphone. Forwarded to HuRI as
+# an empty ``audio.in`` frame (see WebAudioSender), i.e. right behind the last
+# audio frame on the same queue.
+END_OF_SPEECH = b""
+
+
+def _route_inbound(bridge: BrowserBridge, msg: Dict[str, Any]) -> None:
+    """Demux one browser message onto the bridge's per-topic queues.
+
+    Binary frames are mic PCM (always ``audio.in``; an empty one is the
+    end-of-speech marker, what the ATP frontend sends). JSON frames are
+    either ``{"topic": "audio.in", "end": true}`` — the same marker, spelled
+    out for a client that can't send a zero-length binary frame — or typed
+    text tagged with which topic/event the tester picked in the Composer's
+    event dropdown (``{"topic": "question"|"token", "text": ...}``). Either
+    way an ``audio.in`` JSON message never reaches the text senders: on the
+    bridge that predates this routing it fell through to ``question`` as an
+    empty typed question.
+    """
+    raw_bytes = msg.get("bytes")
+    if raw_bytes is not None:
+        bridge.queue_for("audio.in").put_nowait(raw_bytes)
+        return
+
+    raw_text = msg.get("text")
+    if raw_text is None:
+        return
+    try:
+        data = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(data, dict):
+        return
+
+    if data.get("topic") == "audio.in":
+        if data.get("end"):
+            bridge.queue_for("audio.in").put_nowait(END_OF_SPEECH)
+        return
+
+    topic = "token" if data.get("topic") == "token" else "question"
+    bridge.queue_for(topic).put_nowait(data.get("text", ""))
+
+
 async def _pump_inbound(bridge: BrowserBridge, ws: WebSocket) -> None:
-    """Demux browser input: binary frames are mic PCM (always targets
-    ``audio.in``); JSON frames are typed text tagged with which topic/event
-    the tester picked in the Composer's event dropdown."""
     while True:
         msg = await ws.receive()
         if msg["type"] == "websocket.disconnect":
             raise WebSocketDisconnect()
-
-        raw_bytes = msg.get("bytes")
-        if raw_bytes is not None:
-            bridge.queue_for("audio.in").put_nowait(raw_bytes)
-            continue
-
-        raw_text = msg.get("text")
-        if raw_text is None:
-            continue
-        try:
-            data = json.loads(raw_text)
-        except json.JSONDecodeError:
-            continue
-
-        topic = "token" if data.get("topic") == "token" else "question"
-        bridge.queue_for(topic).put_nowait(data.get("text", ""))
+        _route_inbound(bridge, msg)
 
 
 async def run_browser_session(
@@ -420,9 +470,12 @@ async def run_browser_session(
       2. we reply ``{"type": "session_config", "config": {...}}`` with the
          resolved config (:func:`describe_config`);
       3. from then on it's the steady-state protocol: binary frames are mic
-         PCM, JSON frames are ``{"topic": "question"|"token", "text": ...}``
-         inbound, and outbound messages are ``{"type": "token"|"audio"|
-         "motion"|"question", ...}`` (see the hooks above).
+         PCM (an empty one = mic closed, end the utterance), JSON frames are
+         ``{"topic": "question"|"token", "text": ...}`` or that same marker
+         as ``{"topic": "audio.in", "end": true}`` inbound (see
+         :func:`_route_inbound`), and outbound messages are
+         ``{"type": "token"|"audio"|"motion"|"question"|"transcript", ...}``
+         (see the hooks above).
     """
     try:
         handshake = await ws.receive_json()

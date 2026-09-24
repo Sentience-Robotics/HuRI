@@ -5,10 +5,12 @@ Why this exists
 ---------------
 ``MIC`` (src/modules/speech_to_text/microphone_vad.py) decides a turn is over
 when WebRTC's VAD has reported ``silence_duration`` seconds of non-speech in a
-row. Everything downstream is gated on that one decision: no end marker means
-STT never emits ``Transcript(end=True)``, TAG never flushes its sentence, QAG
-never builds a RAGQuestion — and the browser never sees a "question" message.
-The prompt is simply never sent, with nothing in the UI to say why.
+row (a lone speech-tagged frame no longer resets that countdown; two in a row
+do). Everything downstream is gated on that one decision: no end marker means
+STT never runs its final pass, TAG never forwards a question, QAG never builds
+a RAGQuestion — and the browser never sees a "question" message. MIC's
+``max_utterance_duration`` (20 s) is the safety net that eventually closes
+such a turn, but a 20 s wait is not what you want either.
 
 Whether that decision is right depends entirely on the signal your capture path
 produces: room noise, mic gain, and (in the browser) Chrome's echo cancellation
@@ -21,7 +23,8 @@ Getting a recording
 Tune on the audio HuRI actually scored, not on a fresh capture — the browser
 path resamples and denoises, so a local recording is a different signal, and on
 WSL2 there is no capture device at all. Set ``HURI_MIC_DUMP_DIR`` when starting
-HuRI and MIC writes every frame it is handed to a WAV::
+HuRI and MIC writes every frame it is handed to a WAV (plus a ``.jsonl``
+sidecar with its live per-frame decision, which ``trace`` reports)::
 
     HURI_MIC_DUMP_DIR=/tmp/huri-mic serve run config/huri.yaml
 
@@ -33,9 +36,9 @@ Usage
 -----
 ::
 
-    tools/vad_tune.py level /tmp/huri-mic/mic-*.wav
-    tools/vad_tune.py tune  /tmp/huri-mic/mic-*.wav --utterances 3
-    tools/vad_tune.py trace /tmp/huri-mic/mic-*.wav -a 2 -s 1.0
+    tools/vad_tune.py level /tmp/huri-mic/mic_*.wav
+    tools/vad_tune.py tune  /tmp/huri-mic/mic_*.wav --utterances 3
+    tools/vad_tune.py trace /tmp/huri-mic/mic_*.wav -a 2 -s 1.0
 
 ``level`` first: if the recording is clipped, near-silent, or has no usable gap
 between speech and background, no VAD setting will save it and the tuner will
@@ -361,7 +364,10 @@ def reconcile(
 class Replay:
     """What the real MIC state machine did over a recording."""
 
-    speech: np.ndarray  # per-frame: did MIC emit a Voice(data)?
+    # per-frame: did MIC forward this frame to STT, i.e. was it inside a turn?
+    # (MIC forwards every frame of a turn, pauses included; the onset frame
+    # also carries the pre-roll.)
+    speech: np.ndarray
     ends: List[int] = field(default_factory=list)  # frames that emitted Voice(None)
 
 
@@ -370,11 +376,13 @@ async def _replay(
     aggressiveness: int,
     silence_duration: float,
     block_duration: float,
+    mic_kwargs: Optional[dict] = None,
 ) -> Replay:
     mic = MIC(
         vad_agressiveness=aggressiveness,
         silence_duration=silence_duration,
         block_duration=block_duration,
+        **(mic_kwargs or {}),
     )
     speech = np.zeros(len(blocks), dtype=bool)
     ends: List[int] = []
@@ -394,10 +402,30 @@ def replay(
     aggressiveness: int,
     silence_duration: float,
     block_duration: float,
+    mic_kwargs: Optional[dict] = None,
 ) -> Replay:
     return asyncio.run(
-        _replay(blocks, aggressiveness, silence_duration, block_duration)
+        _replay(blocks, aggressiveness, silence_duration, block_duration, mic_kwargs)
     )
+
+
+def _mic_kwargs(args: argparse.Namespace) -> dict:
+    """MIC parameters outside the sweep, passed through from the CLI."""
+    return {
+        "speech_debounce_frames": args.debounce,
+        "max_utterance_duration": args.max_utterance,
+    }
+
+
+def load_marks(wav: Path) -> Optional[List[dict]]:
+    """The live MIC decisions saved next to a HURI_MIC_DUMP_DIR capture."""
+    sidecar = Path(str(wav) + ".jsonl")
+    if not sidecar.exists():
+        return None
+    import json
+
+    with sidecar.open() as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +570,7 @@ def cmd_tune(args: argparse.Namespace) -> int:
         )
         return 1
 
+    mic_kwargs = _mic_kwargs(args)
     utterances, mask, note = reconcile(utterances, mask, args.utterances)
     print(f"\nReference: {len(utterances)} utterance(s)", end="")
     print(f" — {note}." if note else " detected by energy.")
@@ -562,7 +591,9 @@ def cmd_tune(args: argparse.Namespace) -> int:
         )
         for aggressiveness in AGGRESSIVENESS_GRID:
             for silence in SILENCE_GRID:
-                rep = replay(blocks, aggressiveness, silence, block_duration)
+                rep = replay(
+                    blocks, aggressiveness, silence, block_duration, mic_kwargs
+                )
                 results.append(
                     score(
                         rep,
@@ -626,9 +657,9 @@ def _print_config(best: Result) -> None:
     print(f'  "emo": {{ "name": "emo", "args": {{ "block_duration": {block} }} }}')
     print()
     print(
-        "mic/stt/emo must all carry the same block_duration — STT sizes its "
-        "transcription window in frames, so a mismatch silently changes how "
-        "much audio a window holds."
+        "mic/stt/emo must all carry the same block_duration — EMO sizes its "
+        "analysis window in frames, so a mismatch silently changes how much "
+        "audio a window holds (STT counts samples and no longer cares)."
     )
     if abs(block - WEB_BLOCK_DURATION) > 1e-9:
         print()
@@ -644,14 +675,25 @@ def cmd_trace(args: argparse.Namespace) -> int:
     samples = load_wav(args.wav)
     block = args.block
     blocks = to_blocks(samples, block)
-    rep = replay(blocks, args.aggressiveness, args.silence, block)
+    rep = replay(blocks, args.aggressiveness, args.silence, block, _mic_kwargs(args))
     db = frame_dbfs(samples, block)
+
+    marks = load_marks(args.wav)
+    if marks is not None:
+        live_turns = sum(
+            1 for a, b in zip(marks, marks[1:]) if a["in"] and not b["in"]
+        )
+        print(
+            f"\nLive session (from {args.wav.name}.jsonl): {len(marks)} frames, "
+            f"{sum(m['speech'] for m in marks)} VAD-positive, "
+            f"{live_turns} turn(s) closed."
+        )
 
     print(
         f"\nTimeline — aggressiveness {args.aggressiveness}, "
         f"silence_duration {args.silence}s, block {block * 1000:.0f}ms\n"
     )
-    print(f"  {'time':>8} {'dBFS':>7}  VAD")
+    print(f"  {'time':>8} {'dBFS':>7}  MIC")
     ends = set(rep.ends)
     was_speech = False
     for i in range(len(blocks)):
@@ -661,7 +703,7 @@ def cmd_trace(args: argparse.Namespace) -> int:
         # frames and a wall of identical lines hides the three that matter.
         if speech == was_speech and not end:
             continue
-        marker = "END OF TURN" if end else ("speech" if speech else "silence")
+        marker = "END OF TURN" if end else ("in turn" if speech else "outside")
         print(f"  {i * block:7.2f}s {db[i]:7.1f}  {marker}")
         was_speech = speech
     print(f"\n  {len(rep.ends)} turn(s) closed.")
@@ -737,6 +779,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             help="ignore speech runs shorter than this (default: %(default)s s)",
         )
 
+    def add_mic_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--debounce",
+            type=int,
+            default=2,
+            help="MIC speech_debounce_frames (default: %(default)s)",
+        )
+        p.add_argument(
+            "--max-utterance",
+            type=float,
+            default=20.0,
+            help="MIC max_utterance_duration in s (default: %(default)s)",
+        )
+
     p_level = sub.add_parser("level", help="signal health of a recording")
     p_level.add_argument("wav", type=Path)
     add_segmentation_args(p_level)
@@ -757,6 +813,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     p_tune.add_argument("--top", type=int, default=12, help="rows to show")
     add_segmentation_args(p_tune)
+    add_mic_args(p_tune)
     p_tune.set_defaults(func=cmd_tune)
 
     p_trace = sub.add_parser("trace", help="frame-by-frame timeline for one config")
@@ -772,6 +829,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=WEB_BLOCK_DURATION,
         choices=ALL_BLOCK_DURATIONS,
     )
+    add_mic_args(p_trace)
     p_trace.set_defaults(func=cmd_trace)
 
     p_record = sub.add_parser("record", help="capture locally (needs an input device)")

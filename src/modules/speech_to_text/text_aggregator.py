@@ -1,4 +1,4 @@
-from difflib import SequenceMatcher
+import logging
 from typing import Optional
 
 from src.core.module import Module
@@ -6,11 +6,24 @@ from src.modules.rag.events import PartialQuestion
 
 from .events import Transcript
 
+logger = logging.getLogger("ray.serve")
+
 
 class TAG(Module):
     """TAG Module
 
-    Aggregate all transcriptions and send when transcript end.
+    Forward the final transcript of each utterance as a PartialQuestion.
+
+    Contract with STT (see speech_to_text.py): ``Transcript(end=False)`` is a
+    best-effort partial from the sliding window, for live display only;
+    ``Transcript(end=True)`` carries the COMPLETE text of the utterance from a
+    single whole-utterance pass. So there is nothing left to aggregate here —
+    the old character-level merge of overlapping window texts
+    (``SequenceMatcher.find_longest_match``) truncated or duplicated words
+    whenever two windows transcribed their overlap differently.
+
+    An empty final is forwarded too: QAG uses it to drop the turn together with
+    the emotion EAG emitted for it.
 
     input: transcript,
     output: partial_question
@@ -24,32 +37,13 @@ class TAG(Module):
     ):
         super().__init__()
 
-        self.sentence: str = ""
-        self.prev_index: int = 0
-
-    def _merge(self, current: str, new: str) -> str:
-        matcher = SequenceMatcher(None, current, new)
-        match = matcher.find_longest_match(0, len(current), 0, len(new))
-        if match.a >= self.prev_index:
-            self.prev_index = match.a
-            return current[: match.a] + new[match.b :]
-
-        self.prev_index = len(current)
-        return current + new
-
     async def process(self, transcript: Transcript) -> Optional[PartialQuestion]:
-        text = transcript.text
-
-        if text != "":
-            if self.sentence == "":
-                self.sentence = text
-            else:
-                self.sentence = self._merge(self.sentence, text)
-
-        if transcript.end and self.sentence != "":
-            transcript = Transcript(self.sentence, True)
-            self.sentence = ""
-            self.prev_index = 0
-            return PartialQuestion(transcript=transcript, emotion=None)
-        else:
+        if not transcript.end:
             return None
+
+        text = transcript.text.strip()
+        if text:
+            logger.info("[TAG] question: %r", text)
+        else:
+            logger.info("[TAG] empty final transcript, turn dropped")
+        return PartialQuestion(transcript=Transcript(text, True), emotion=None)

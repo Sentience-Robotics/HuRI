@@ -141,8 +141,13 @@ class Client:
 
                 else:
                     event = json.loads(msg)
+                    if not isinstance(event, dict) or "topic" not in event:
+                        # e.g. HuRI's {"type": "session_error", ...}. A KeyError
+                        # here used to kill this loop silently.
+                        print(f"[Client] unexpected message from HuRI: {str(msg)[:200]!r}")
+                        continue
                     topic = event["topic"]
-                    data = event["data"]
+                    data = event.get("data")
 
                 for hook in self.hooks[topic]:
                     # `from_wire` is the deserialization contract for BOTH wire
@@ -154,8 +159,21 @@ class Client:
                     task = asyncio.create_task(hook.hook(hook_data))
                     task.add_done_callback(self._log_hook_error)
 
-        except (asyncio.CancelledError, websockets.ConnectionClosedOK):
+        except asyncio.CancelledError:
             pass
+        except websockets.ConnectionClosed as e:
+            # Only the clean close used to be caught, and every other way the
+            # link can die (HuRI restarted, network drop, a frame over
+            # max_size) was swallowed just the same — hooks stopped, senders
+            # kept waiting, and the browser still said "Connected".
+            print(
+                f"[Client] HuRI connection closed: code={e.code} reason={e.reason!r}"
+            )
+            if not isinstance(e, websockets.ConnectionClosedOK):
+                raise
+        except Exception:
+            traceback.print_exc()
+            raise
 
     async def run(self):
         async with websockets.connect(self.config.huri_url) as ws:
@@ -169,8 +187,29 @@ class Client:
                 print(f"Session started with _user_id: {user_id}")
 
             receive_task = asyncio.create_task(self._receive_loop(ws=ws))
-            await asyncio.gather(
-                *(sender.input_loop(ws=ws) for sender in self.senders),
+            senders_task = asyncio.ensure_future(
+                asyncio.gather(*(sender.input_loop(ws=ws) for sender in self.senders))
             )
+            # Whichever side ends first ends the session: the senders finishing
+            # (CLI input exhausted) as before, or the receive loop dying — in
+            # which case the senders would otherwise block forever on a link
+            # nobody is reading any more.
+            try:
+                done, _ = await asyncio.wait(
+                    {receive_task, senders_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                receive_task.cancel()
+                senders_task.cancel()
+                await asyncio.gather(
+                    receive_task, senders_task, return_exceptions=True
+                )
 
-            receive_task.cancel()
+            if receive_task in done:
+                print("[Client] HuRI link ended, closing session")
+                exc = receive_task.exception()
+                if exc is not None:
+                    raise exc
+            elif senders_task in done:
+                senders_task.result()  # surface a sender failure

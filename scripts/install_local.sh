@@ -1301,7 +1301,10 @@ generate_configs() {
   local emage_path="$MODELS_DIR/emage/$EMAGE_REPO_ID"
   local pythonpath="$REPO_ROOT"
   [[ "$P_TTS_DEV" != "off" ]] && pythonpath="$REPO_ROOT:$cosy_dir:$cosy_dir/third_party/Matcha-TTS"
-  local stt_workers=1
+  # Two CTranslate2 slots on GPU: STT runs a short partial pass while the user
+  # talks and a whole-utterance final pass at end of turn, and the final must
+  # not queue behind a partial that is still in flight.
+  local stt_workers=2
   if [[ "$P_STT_DEV" == "cpu" ]]; then
     stt_workers=$(( CPU_CORES / 4 ))
     (( stt_workers < 1 )) && stt_workers=1

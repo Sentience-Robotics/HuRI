@@ -8,6 +8,15 @@ from .module import Module
 
 logger = logging.getLogger("ray.serve")
 
+# One event per 30 ms mic frame on these topics: logging them at INFO buried
+# everything else (2 lines per frame, ~1.7 MB per 10 min). Turn boundaries
+# stay visible through the modules' own "[MIC] turn"/"[STT] turn" lines.
+_PER_FRAME_TOPICS = frozenset({"audio.in", "voice"})
+
+
+def _level_for(topic) -> int:
+    return logging.DEBUG if topic in _PER_FRAME_TOPICS else logging.INFO
+
 
 class EventGraph:
     """
@@ -40,12 +49,12 @@ class EventGraph:
 
     async def publish(self, event_topic, data):
         subs = self.subscribers[event_topic]
-        if event_topic not in ("audio_in",):  # skip mic-frame spam
-            logger.info(
-                "[GRAPH] publish topic=%r subscribers=%s",
-                event_topic,
-                [type(m).__name__ for m in subs],
-            )
+        logger.log(
+            _level_for(event_topic),
+            "[GRAPH] publish topic=%r subscribers=%s",
+            event_topic,
+            [type(m).__name__ for m in subs],
+        )
         for module in subs:
             asyncio.create_task(self._run(module, data))
 
@@ -59,7 +68,8 @@ class EventGraph:
                     async for item in generator:
                         if item is None:
                             continue
-                        logger.info(
+                        logger.log(
+                            _level_for(module.output_type),
                             "[GRAPH] %s -> %r: %s",
                             type(module).__name__,
                             module.output_type,
@@ -76,7 +86,8 @@ class EventGraph:
                 try:
                     value = await coroutine
                     if value is not None:
-                        logger.info(
+                        logger.log(
+                            _level_for(module.output_type),
                             "[GRAPH] %s -> %r: %s",
                             type(module).__name__,
                             module.output_type,
