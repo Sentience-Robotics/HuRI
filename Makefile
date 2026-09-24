@@ -1,7 +1,7 @@
 # Run every check even if an earlier one fails, then fail at the end if any did.
 lint:
 	@rc=0; \
-	for cmd in "black ." "isort ." "flake8 ." "mypy . --check-untyped-defs"; do \
+	for cmd in "black ." "isort ." "flake8 ." "mypy . --check-untyped-defs --follow-imports=silent"; do \
 		echo "==> $$cmd"; \
 		$$cmd || rc=1; \
 	done; \

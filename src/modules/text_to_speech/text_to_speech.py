@@ -4,7 +4,7 @@ import queue
 import sys
 import traceback
 import uuid
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 
 import numpy as np
 from ray import serve
@@ -324,10 +324,15 @@ class TTS(ModuleWithHandle):
 
     async def _drain_audio(self, session_id: str, audio_q: asyncio.Queue) -> None:
         try:
-            response = self._handle.options(stream=True).stream_audio.remote(session_id)
+            # Any: the Ray response type differs with/without ray installed
+            # (CI lints without it), so a `type: ignore` would flip between
+            # needed and unused.
+            response: Any = self._handle.options(stream=True).stream_audio.remote(
+                session_id
+            )
             count = 0
             pts = 0.0
-            async for audio in response:  # type: ignore[union-attr]
+            async for audio in response:
                 count += 1
                 audio.pts = pts
                 pts += audio.data.shape[0] / audio.sample_rate
