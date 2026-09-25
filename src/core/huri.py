@@ -95,13 +95,7 @@ class HuRI:
             for hook_config in client_config.hooks.values()
             for topic in hook_config.topics
         ]
-        # Pipeline construction is inside the guard, and the guard catches
-        # Exception rather than ValueError: create_from_config raises
-        # ValueError("Unknown module ...") for a client/server module mismatch,
-        # and each module's __init__ can raise anything (ImportError when a
-        # model dependency is missing). Built outside the try, any of those
-        # escaped the websocket handler and the client saw only an opaque close
-        # — which is exactly what a HURI_MODULES mismatch produced.
+
         try:
             pipeline: List[Module] = self.module_factory.create_from_config(
                 client_config.user_id, client_config.modules

@@ -163,11 +163,6 @@ class Client:
 
             await ws.send(json.dumps(asdict(self.config)))
 
-            # The server answers with session_init on success, or session_error
-            # carrying a precise reason and then closes. There used to be no
-            # else branch here, so on rejection the client fell straight through
-            # and started its senders on an already-closed socket — replacing
-            # the server's explanation with a ConnectionClosedError traceback.
             try:
                 init_msg = json.loads(await ws.recv())
             except websockets.ConnectionClosed:

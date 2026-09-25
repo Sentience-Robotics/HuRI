@@ -10,13 +10,8 @@ logger = logging.getLogger("ray.serve")
 
 
 def _safe_summary(event: EventData) -> str:
-    """summarize() for logging, which must never be able to drop an event.
-
-    The summaries below are built as arguments to logger.info() on the line
-    *before* the matching publish(), inside the same try/except. A raising
-    summarize() therefore silenced the event entirely instead of just the log
-    line — which is exactly how a numpy truthiness bug in Voice.summarize()
-    made the whole microphone pipeline mute.
+    """
+    summarize() for logging, which must never be able to drop an event.
     """
 
     try:
@@ -50,11 +45,6 @@ class EventGraph:
 
     def __init__(self):
         self.subscribers = defaultdict(list)
-        # Strong references to in-flight tasks. asyncio only holds a weak
-        # reference to a running task, so a bare create_task() may be garbage
-        # collected mid-flight and its event lost with no log line at all —
-        # most likely under exactly the load the mic path generates (~33
-        # frames/s per subscriber).
         self._tasks: set[asyncio.Task] = set()
 
     def register(self, module: Module):
@@ -62,10 +52,8 @@ class EventGraph:
 
     async def publish(self, event_topic, data):
         subs = self.subscribers[event_topic]
-        # "audio.in" is the real mic topic (see src/modules/events.py and
-        # microphone_vad.py); the old guard said "audio_in" and so never
-        # matched, logging one line per 30 ms audio frame.
-        if event_topic not in ("audio.in",):  # skip mic-frame spam
+
+        if event_topic not in ("audio.in",):
             logger.info(
                 "[GRAPH] publish topic=%r subscribers=%s",
                 event_topic,

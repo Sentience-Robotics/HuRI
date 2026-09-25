@@ -25,8 +25,6 @@ from src.modules.text_to_speech.events import Token
 from .events import RAGQuestion
 from .qdrant_utils import make_qdrant_client
 
-# Transient failures worth retrying: the embedding/LLM endpoints are on the
-# local network and occasionally blip (container restart, proxy reload).
 _RETRIABLE_EXC = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -34,15 +32,8 @@ _RETRIABLE_EXC = (
     httpx.RemoteProtocolError,
 )
 
-# Reserved _user_id for documents visible to EVERY user (e.g. the HuRI project
-# overview). Retrieval matches the querying user's own id OR this shared id, so
-# one ingested copy is reachable by all sessions. Ingest global docs with
-# `ingestion.py --user-id __shared__ ...`. Keep in sync with any ingestion.
 SHARED_USER_ID = "__shared__"
 
-# Default character persona. Overridable per session via the `persona` key in the
-# client config's module args, or globally via HURI_RAG_DEFAULT_PERSONA in the
-# Serve app runtime_env.env_vars (see deploy values.yaml) — no rebuild needed.
 _DEFAULT_PERSONA = os.environ.get(
     "HURI_RAG_DEFAULT_PERSONA",
     "You are Mouse-Man, a witty, charismatic animated mouse character. "
@@ -60,16 +51,11 @@ class RAGDeploymentConfig(BaseModel):
     llm_provider: str = "ollama"  # "vllm", "ollama", "api"
     llm_url: str = "http://localhost:11434"
     llm_model: str = "mistral:7b"
-    # Defaults to HURI_LLM_API_KEY so a bearer token can be injected through the
-    # replica's environment instead of being written into the Serve config's
-    # user_config (which lives on disk). An explicit user_config value wins.
     llm_api_key: str = os.environ.get("HURI_LLM_API_KEY", "")
     verify_ssl: bool = True
     top_k: int = 5
     score_threshold: float = 0.5
 
-    # Retries for transient embedding/LLM connection failures (exponential
-    # backoff: retry_base_delay * 2**attempt).
     embed_retries: int = 3
     llm_retries: int = 3
     retry_base_delay: float = 1.0
@@ -91,9 +77,6 @@ class RAGQuery:
     _user_id: str
     question: str
     preferences: dict = field(default_factory=dict)
-    # Prior conversation turns as OpenAI-style messages
-    # ([{"role": "user"|"assistant", "content": str}, ...]). The handle is
-    # stateless, so the per-session RAG module owns and supplies this.
     history: list = field(default_factory=list)
 
 
@@ -129,15 +112,8 @@ class RAGHandle:
             )
 
     def _report_document_collection(self) -> None:
-        """Say at startup whether the document collection exists.
-
-        Unlike ``conversations`` (created on demand by
-        ``_ensure_memory_collection``), the document collection is only ever
-        written by the offline ingestion CLI. If it was never run, every
-        retrieval silently returns nothing — answers look fine, they are just
-        ungrounded. Deliberately not auto-created: an empty collection is
-        indistinguishable from "no documents ingested", so saying so is more
-        useful than manufacturing one.
+        """
+        Say at startup whether the document collection exists.
         """
 
         collection = self._cfg.default_collection
@@ -173,9 +149,6 @@ class RAGHandle:
         return collection, filters
 
     async def _retry_on_connect_failure(self, func, *, attempts: int, what: str):
-        """Retry `func()` (a zero-arg async callable) on transient connection
-        errors, with exponential backoff. Re-raises immediately on the last
-        attempt or on any non-retriable exception."""
         for attempt in range(1, attempts + 1):
             try:
                 return await func()
@@ -218,11 +191,8 @@ class RAGHandle:
             ) from e
 
     def _get_profile(self, collection: str, _user_id: str) -> list[str]:
-        """Always-on facts about the user (name, etc.).
-
-        Retrieved deterministically by filter — NOT by vector similarity —
-        so they are always available to the prompt regardless of the question.
-        Populated via `ingestion.py profile`.
+        """
+        Always-on facts about the user (name, etc.).
         """
         try:
             points, _ = self._qdrant.scroll(
@@ -265,12 +235,8 @@ class RAGHandle:
         return "".join(parts)
 
     def _recency_importance(self, payload: dict) -> tuple[float, int]:
-        """Exponential decay factor and importance for one memory point.
-
-        Shared by the two scorers below, which combine these differently:
-        `_memory_strength` takes a weighted sum including query relevance
-        (query-time re-ranking), while maintenance uses a plain product
-        (query-independent pruning). Only this computation was duplicated.
+        """
+        Exponential decay factor and importance for one memory point.
         """
 
         importance: int = payload.get("importance", 3)
@@ -322,7 +288,6 @@ class RAGHandle:
         )
         top = scored[: self._cfg.memory_top_k]
 
-        # MemoryBank-style reinforcement: recalled memories decay slower.
         now = datetime.now().isoformat()
         for p in top:
             try:
@@ -415,8 +380,6 @@ class RAGHandle:
         return None
 
     def _mark_maintenance_done(self, vector_size: int) -> None:
-        # Marker point: zero vector, type=maintenance_marker. Filtered out of
-        # retrieval automatically (zero vector never scores) but be explicit anyway.
         self._qdrant.upsert(
             collection_name=self._cfg.memory_collection,
             points=[
@@ -472,7 +435,6 @@ class RAGHandle:
             return  # collection doesn't exist yet — nothing to do
 
         def base_strength(payload: dict) -> float:
-            # query-independent: recency * importance
             recency, imp = self._recency_importance(payload)
             return recency * (imp / 10.0)
 
@@ -555,17 +517,12 @@ class RAGHandle:
             should: Any = None
             for k, v in filters.items():
                 if k == "_user_id":
-                    # Match the querying user's own docs OR the shared/global
-                    # partition, so "all users" docs (ingested under
-                    # SHARED_USER_ID) are retrieved alongside personal ones.
                     should = [
                         FieldCondition(key=k, match=MatchValue(value=v)),
                         FieldCondition(key=k, match=MatchValue(value=SHARED_USER_ID)),
                     ]
                 else:
                     must.append(FieldCondition(key=k, match=MatchValue(value=v)))
-            # With `should`, Qdrant requires >=1 of the OR conditions to match;
-            # any other filters stay as `must` (AND).
             qdrant_filter = Filter(must=must or None, should=should)
 
         try:
@@ -577,11 +534,6 @@ class RAGHandle:
                 score_threshold=self._cfg.score_threshold,
             ).points
         except Exception as e:  # noqa: BLE001
-            # Degrade to an ungrounded answer rather than failing the turn — but
-            # say so. A bare `results = []` made "collection does not exist",
-            # "Qdrant is down" and "nothing matched" indistinguishable, which is
-            # how a RAG deployment can look healthy while retrieving nothing at
-            # all. Warned once per collection, since this runs per question.
             if collection not in self._warned_collections:
                 self._warned_collections.add(collection)
                 print(
@@ -670,9 +622,6 @@ class RAGHandle:
                 "Don't speak about the sources, just use them to answer."
             )
 
-        # Final line the model reads before generating — the highest-compliance
-        # slot for a formatting rule. open-mistral-nemo skips the persona-level
-        # no-Ah/Oh rule often enough that we restate it right at the tail.
         user_prompt += (
             "\n\nStart your answer straight on the substance — do not open with "
             '"Ah" or "Oh".'
@@ -900,9 +849,6 @@ class RAG(ModuleWithHandle, ModuleWithId):
         if persona:
             self.preferences["persona"] = persona
 
-        # Per-session conversation memory, kept on the (per-WebSocket) module
-        # instance because the RAGHandle deployment is stateless/shared.
-        # Stored as OpenAI-style messages; trimmed to the last N turns.
         self._max_history_turns = max_history_turns
         self.history: list[dict] = []
 
