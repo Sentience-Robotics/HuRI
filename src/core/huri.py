@@ -95,14 +95,20 @@ class HuRI:
             for hook_config in client_config.hooks.values()
             for topic in hook_config.topics
         ]
-        pipeline: List[Module] = self.module_factory.create_from_config(
-            client_config.user_id, client_config.modules
-        )
 
         try:
+            pipeline: List[Module] = self.module_factory.create_from_config(
+                client_config.user_id, client_config.modules
+            )
             self._check_subscriptions(pipeline, topic_list)
-        except ValueError as e:
-            await ws.send_json({"type": "session_error", "error": str(e)})
+        except Exception as e:
+            await ws.send_json(
+                {
+                    "type": "session_error",
+                    "error": f"{type(e).__name__}: {e}",
+                    "server_modules": self.module_factory.registered(),
+                }
+            )
             await ws.close(code=1008, reason="invalid session config")
             print(f"[HuRI] rejected session for {client_config.user_id}: {e}")
             return

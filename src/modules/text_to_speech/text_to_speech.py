@@ -217,6 +217,30 @@ class TTSDeployment:
             self._text_queues.pop(session_id, None)
 
 
+def _select_engine():
+    """Pick the TTS engine from HURI_TTS_ENGINE (default: piper).
+
+    Both engines are registered as Serve deployment ``name="TTS"`` and expose
+    the same four methods, so a config's ``deployments: - name: TTS`` block and
+    the ``TTS`` module below work with either one unchanged.
+
+    piper (default) is ONNX-only and ~30x faster than realtime on CPU, so it
+    works on every machine. cosyvoice adds zero-shot voice cloning but needs
+    torch plus CUDA — see piper_tts.py for the measurements behind this default.
+    """
+
+    engine = os.environ.get("HURI_TTS_ENGINE", "piper").strip().lower()
+    if engine == "cosyvoice":
+        return TTSDeployment
+    if engine in ("", "piper"):
+        from .piper_tts import PiperTTSDeployment
+
+        return PiperTTSDeployment
+    raise ValueError(
+        f"unknown HURI_TTS_ENGINE={engine!r}; expected 'piper' or 'cosyvoice'"
+    )
+
+
 class TTS(ModuleWithHandle):
     """TTS Module — bistream tokens-in / audio-out via CosyVoice3.
 
@@ -230,7 +254,7 @@ class TTS(ModuleWithHandle):
     output: audio (Audio)
     """
 
-    _handle_cls = TTSDeployment
+    _handle_cls = _select_engine()
     input_type = "token"
     output_type = "audio.out"
 

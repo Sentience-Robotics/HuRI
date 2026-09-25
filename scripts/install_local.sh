@@ -46,10 +46,13 @@ TORCH_CUDA_VERSION="2.3.1"          # requirements-nvidia.txt
 TORCH_CUDA_INDEX="https://download.pytorch.org/whl/cu121"
 TORCH_CPU_INDEX="https://download.pytorch.org/whl/cpu"
 # deploy/Dockerfile.amd
-ROCM_VERSION="7.2"
-ROCM_TORCH_WHEEL="torch-2.8.0+rocm7.2.0.lw.gitbf943426"
-ROCM_TORCHAUDIO_WHEEL="torchaudio-2.8.0+rocm7.2.0.git6e1c7fe9"
-ROCM_TRITON_VERSION="3.4.0+rocm7.2.0.git0cace8d2"
+ROCM_VERSION="7.2"                  # system ROCm runtime we ask the distro for
+# Official PyTorch ROCm wheels — chosen over repo.radeon.com because those omit
+# consumer RDNA3 (gfx1102). See the comment at the amd) branch of
+# install_python_deps for the measured arch lists.
+TORCH_ROCM_VERSION="2.8.0"
+TORCH_ROCM_FLAVOUR="rocm6.4"        # wheels are self-contained; need not match ROCM_VERSION
+TORCH_ROCM_INDEX="https://download.pytorch.org/whl/rocm6.4"
 CT2_ROCM_URL="https://github.com/OpenNMT/CTranslate2/releases/download/v4.7.1/rocm-python-wheels-Linux.zip"
 
 # helm/templates/*-model-init-job.yaml + deploy/examples/*/values.yaml
@@ -84,6 +87,10 @@ VRAM_GESTURE=2200
 declare -A VRAM_STT=( [base]=1000 [small]=1600 [medium]=3200 [large-v3]=6000 )
 declare -A RAM_STT=(  [base]=700  [small]=1100 [medium]=2400 [large-v3]=4500 )
 RAM_TTS_CPU=6000
+# Piper: a 61 MB ONNX voice plus onnxruntime arena. Measured ~0.03x realtime on
+# a Ryzen 7840HS, i.e. ~30x faster than it speaks, so it never needs a GPU.
+RAM_TTS_PIPER=400
+DISK_PIPER=200          # voice model + piper-tts wheel
 RAM_GESTURE_CPU=2500
 RAM_EMO_PER_SESSION=1600
 RAM_BASE=3000          # ray head + serve controller + proxy + HuRI actor
@@ -129,6 +136,10 @@ LLM_API_KEY=""
 EMBED_URL=""
 QDRANT_URL="http://localhost:6333"
 VERIFY_SSL=1
+MODULES_OVERRIDE=""
+STT_DEVICE_OVERRIDE=""
+TTS_ENGINE="auto"
+PIPER_VOICE_NAME="en_US-lessac-medium"
 VOICE_SAMPLE=""
 VOICE_TRANSCRIPT="Instinct creates its own oppressors and bids us rise up against them."
 PYTHON_BIN=""
@@ -155,6 +166,16 @@ Planning
       --vram MB           Override detected VRAM (for GPUs the tools can't read)
       --reserve-vram MB   VRAM left free for driver/context (default: 700)
       --stt-model SIZE    base | small | medium | large-v3 (default: base)
+      --tts-engine E      auto | piper | cosyvoice         (default: auto)
+                          auto: cosyvoice when an NVIDIA GPU has room for it,
+                            piper everywhere else.
+                          piper: ONNX, ~30x faster than realtime on any CPU,
+                            61 MB voice, no GPU — works on every machine.
+                          cosyvoice: zero-shot voice cloning from --voice-sample,
+                            but needs an NVIDIA GPU (on CPU it is ~7x SLOWER
+                            than realtime; on ROCm the vocoder crashes).
+      --piper-voice NAME  Piper voice to download (default: en_US-lessac-medium)
+                          Browse: https://huggingface.co/rhasspy/piper-voices
       --llm-model TAG     Model name; default is an Ollama tag picked from the
                           free VRAM/RAM. Required with a remote --llm-url.
       --embed-model TAG   Embedding model (default: bge-m3)
@@ -173,6 +194,11 @@ no Ollama/Qdrant is installed for it, and it costs no local VRAM/RAM)
       --force-tts         Keep TTS even when the plan puts it on CPU
       --force-gesture     Keep gesture generation even when it lands on CPU
       --force-emo         Keep prosody/emotion even when RAM is tight
+      --modules LIST      Explicit module allow-list instead of the planned one,
+                          e.g. --modules mic,stt,tag,qag,rag  (text pipeline) or
+                          --modules rag (text in, text out). Subset of:
+                          mic,stt,tag,emo,eag,qag,rag,tts,gesture
+      --stt-device D      gpu | cpu — override where speech-to-text runs
 
 Install
   -y, --yes               Don't ask for confirmation
@@ -205,6 +231,10 @@ while [[ $# -gt 0 ]]; do
     --vram)            VRAM_OVERRIDE="${2:?}"; shift ;;
     --reserve-vram)    RESERVE_VRAM="${2:?}"; shift ;;
     --stt-model)       STT_SIZE="${2:?}"; shift ;;
+    --modules)         MODULES_OVERRIDE="${2:?}"; shift ;;
+    --stt-device)      STT_DEVICE_OVERRIDE="${2:?}"; shift ;;
+    --tts-engine)      TTS_ENGINE="${2:?}"; shift ;;
+    --piper-voice)     PIPER_VOICE_NAME="${2:?}"; shift ;;
     --llm-model)       LLM_MODEL="${2:?}"; shift ;;
     --embed-model)     EMBED_MODEL="${2:?}"; shift ;;
     --llm-url)         LLM_URL="${2:?}"; shift ;;
@@ -233,6 +263,8 @@ done
 
 [[ -n "${VRAM_STT[$STT_SIZE]:-}" ]] || { echo "unknown --stt-model '$STT_SIZE'" >&2; exit 2; }
 case "$PROFILE" in auto|nvidia|amd|cpu) ;; *) echo "unknown --profile '$PROFILE'" >&2; exit 2 ;; esac
+case "${STT_DEVICE_OVERRIDE:-cpu}" in gpu|cpu) ;; *) echo "unknown --stt-device '$STT_DEVICE_OVERRIDE' (gpu|cpu)" >&2; exit 2 ;; esac
+case "$TTS_ENGINE" in auto|piper|cosyvoice) ;; *) echo "unknown --tts-engine '$TTS_ENGINE' (auto|piper|cosyvoice)" >&2; exit 2 ;; esac
 
 # An API key given on an earlier run lives in .huri-local/secrets.env; reload it
 # so `--only config` re-runs keep working without re-passing the secret.
@@ -245,6 +277,16 @@ fi
 # rag.py falls back to llm_url when embedding_url is empty; mirror that here so
 # the plan and the generated config agree on which endpoint is used.
 EMBED_URL_EFF="${EMBED_URL:-$LLM_URL}"
+
+# Port from --qdrant-url, so the flag reaches the code paths that provision and
+# probe Qdrant instead of only the value written into the generated config.
+# Anchored to the authority component: a loose `:([0-9]+)` would match a port
+# inside a path (…/collections/v2 -> 2). Falls back to Qdrant's default.
+QDRANT_PORT="$(printf '%s' "$QDRANT_URL" \
+  | sed -nE 's#^[a-zA-Z][a-zA-Z0-9+.-]*://[^/]*:([0-9]+).*#\1#p')"
+QDRANT_PORT="${QDRANT_PORT:-6333}"
+# Qdrant's gRPC port conventionally sits directly above the HTTP one.
+QDRANT_GRPC_PORT=$(( QDRANT_PORT + 1 ))
 
 if [[ -z "$LLM_PROVIDER" ]]; then
   # /api/chat (ollama) vs /v1/chat/completions (vllm, api). Only "api" sends the
@@ -276,14 +318,33 @@ die()   { err "$*"; exit 1; }
 step()  { printf '\n%s==>%s %s%s%s\n' "$C_C" "$C_RST" "$C_B" "$*" "$C_RST"; _log "STEP  $*"; }
 note()  { printf '    %s%s%s\n' "$C_DIM" "$*" "$C_RST"; }
 
+# The command run() is currently executing, for the ERR trap. Inside run() the
+# trap cannot use $BASH_COMMAND (it expands to the literal string '"$@"') nor
+# $LINENO (it always resolves to run()'s own body), so we record it explicitly.
+LAST_RUN=""
+
 # run <cmd...> — echo in dry-run, execute otherwise (stdout/stderr also logged).
 run() {
   if (( DRY_RUN )); then
     printf '    %s$ %s%s\n' "$C_DIM" "$(printf '%q ' "$@")" "$C_RST"
     return 0
   fi
+  LAST_RUN="$*"
   _log "RUN   $*"
-  "$@"
+  local rc=0
+  if [[ -d "$STATE_DIR" ]]; then
+    # Tee into install.log: without this, pip/curl/pacman error text is lost and
+    # a failure is undiagnosable afterwards. errexit would abort on the pipeline
+    # before PIPESTATUS could be read, hence the set +e / set -e pair.
+    set +e
+    "$@" 2>&1 | tee -a "$LOG_FILE"
+    rc=${PIPESTATUS[0]}
+    set -e
+  else
+    set +e; "$@"; rc=$?; set -e
+  fi
+  if (( rc == 0 )); then LAST_RUN=""; fi
+  return "$rc"
 }
 
 # Write a file (respecting --dry-run). Content on stdin.
@@ -328,7 +389,86 @@ stage_enabled() {
 
 mb_to_gb() { awk -v m="$1" 'BEGIN{printf "%.1f", m/1024}'; }
 
-trap 'err "failed at line $LINENO (see $LOG_FILE)"' ERR
+# --- ROCm helpers ------------------------------------------------------------
+
+# The pip wheels this installer pulls (repo.radeon.com torch/torchaudio/triton
+# and the OpenNMT CTranslate2 build) link the ROCm userspace as hard DT_NEEDED
+# entries and bundle none of it. Without these packages every `import torch` and
+# `import ctranslate2` dies with "libamdhip64.so.7: cannot open shared object
+# file". deploy/Dockerfile.amd:18-36 installs the same set inside the image.
+ROCM_PKGS_PACMAN=(rocm-hip-runtime rocm-hip-libraries roctracer hipblaslt
+                  hipsparselt miopen-hip rccl)
+ROCM_PKGS_APT=(rocm-hip-runtime rocm-hip-libraries rocm-smi-lib rocblas hipblas
+               hipblaslt hipfft hiprand hipsolver hipsparse rocsolver
+               miopen-hip rccl roctracer)
+
+# rocm_have_runtime — is the HIP runtime the wheels need actually present?
+rocm_have_runtime() {
+  ldconfig -p 2>/dev/null | grep -q 'libamdhip64\.so\.7' && return 0
+  [[ -e "${ROCM_PATH:-/opt/rocm}/lib/libamdhip64.so.7" ]]
+}
+
+# rocm_will_be_available — present already, or about to be installed by the
+# system stage. Only pacman and apt are covered; elsewhere the ROCm package
+# names differ too much to guess, so the plan degrades to CPU instead.
+rocm_will_be_available() {
+  rocm_have_runtime && return 0
+  (( SKIP_SYSTEM )) && return 1
+  stage_enabled system || return 1
+  case "$PKG_MGR" in pacman|apt) return 0 ;; *) return 1 ;; esac
+}
+
+rocm_runtime_hint() {
+  case "$PKG_MGR" in
+    pacman) note "sudo pacman -S --needed ${ROCM_PKGS_PACMAN[*]}" ;;
+    apt)    note "add the repo.radeon.com apt source for ROCm $ROCM_VERSION, then:"
+            note "sudo apt install ${ROCM_PKGS_APT[*]}" ;;
+    *)      note "install the ROCm $ROCM_VERSION runtime for your distro (hip-runtime + rocblas/hipblas/miopen/rccl/roctracer)" ;;
+  esac
+  note "Then re-run: scripts/install_local.sh --only verify"
+}
+
+# rocm_gfx_override <venv python> — echo the HSA_OVERRIDE_GFX_VERSION this GPU
+# needs, or nothing if it is natively supported.
+#
+# A ROCm torch wheel only carries code objects for the architectures it was
+# built for. AMD's repo.radeon.com ".lw." (lightweight) wheels target data
+# centre parts and omit consumer RDNA3 — notably gfx1102 (RX 7600/7700S). On
+# such a card torch.cuda.is_available() is True and the device name resolves,
+# but every kernel launch aborts inside HIP with
+#   hip_code_object.cpp:400: Assertion `err == hipSuccess' failed
+# which looks like a hardware fault and is really a missing binary. Reporting a
+# same-family supported arch (gfx1102 -> 11.0.0, i.e. gfx1100) makes the
+# prebuilt kernels load. Same RDNA3 ISA, different CU counts.
+rocm_gfx_override() {
+  local vpy="$1" arch supported
+  arch="$("$vpy" -c 'import torch;print(torch.cuda.get_device_properties(0).gcnArchName.split(":")[0])' 2>/dev/null)" || return 0
+  [[ -n "$arch" ]] || return 0
+  supported="$("$vpy" -c 'import torch;print(",".join(torch.cuda.get_arch_list()))' 2>/dev/null)" || return 0
+  [[ ",$supported," == *",$arch,"* ]] && return 0
+  case "$arch" in
+    gfx1102|gfx1103|gfx1150|gfx1151) [[ ",$supported," == *",gfx1100,"* ]] && echo "11.0.0" ;;
+    gfx1031|gfx1032|gfx1034|gfx1035) [[ ",$supported," == *",gfx1030,"* ]] && echo "10.3.0" ;;
+  esac
+}
+
+# --- STT device vocabulary ---------------------------------------------------
+# The plan speaks in gpu/cpu; faster-whisper only accepts cpu | cuda | auto
+# (CTranslate2 calls the ROCm backend "cuda" too). Translate once, here, so the
+# generated config and the verification probe cannot disagree.
+stt_ct2_device()       { [[ "$P_STT_DEV" == "gpu" ]] && echo cuda    || echo cpu;  }
+stt_ct2_compute_type() { [[ "$P_STT_DEV" == "gpu" ]] && echo float16 || echo int8; }
+
+# The ERR trap fires twice for a failing run(): once inside the function, then
+# again as errexit propagates to the top level (where BASH_LINENO is 0). Report
+# the first one only, which is the one carrying the real caller line.
+ERR_REPORTED=0
+_on_err() {
+  (( ERR_REPORTED )) && return 0
+  ERR_REPORTED=1
+  err "failed: ${LAST_RUN:-$BASH_COMMAND} (${BASH_SOURCE[0]##*/}:${1:-?}, see $LOG_FILE)"
+}
+trap '_on_err "${BASH_LINENO[0]}"' ERR
 
 # =============================================================================
 # 1. Detection
@@ -337,6 +477,8 @@ trap 'err "failed at line $LINENO (see $LOG_FILE)"' ERR
 OS_NAME=""; OS_VERSION=""; PKG_MGR=""; IS_WSL=0
 CPU_CORES=0; RAM_TOTAL_MB=0; RAM_FREE_MB=0; DISK_FREE_MB=0
 GPU_VENDOR="none"; GPU_NAME=""; GPU_COUNT=0; GPU_VRAM_MB=0; GPU_DRIVER=""
+# HSA_OVERRIDE_GFX_VERSION for this GPU, or empty when natively supported.
+GFX_OVERRIDE=""
 PY_BIN=""; PY_VERSION=""
 HAS_DOCKER=""; HAS_OLLAMA=0
 
@@ -382,30 +524,52 @@ detect_nvidia() {
 }
 
 detect_amd() {
-  local bytes=""
-  if have amd-smi; then
-    bytes="$(amd-smi static --json 2>/dev/null \
-      | grep -oE '"(total|size)"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 \
-      | grep -oE '[0-9]+' || true)"
+  local bytes="" smi=""
+  # Arch installs rocm-smi to /opt/rocm/bin, which is not on PATH by default, so
+  # `have rocm-smi` failed and detection silently degraded to the lspci path.
+  if ! have rocm-smi && [[ -x "${ROCM_PATH:-/opt/rocm}/bin/rocm-smi" ]]; then
+    PATH="${ROCM_PATH:-/opt/rocm}/bin:$PATH"
+    export PATH
   fi
-  if [[ -z "$bytes" ]] && have rocm-smi; then
-    # Output shape moves between ROCm releases; take the first big integer that
-    # follows a "Total" VRAM label, in bytes.
-    bytes="$(rocm-smi --showmeminfo vram 2>/dev/null \
-      | grep -iE 'vram total memory' | grep -oE '[0-9]{7,}' | head -1 || true)"
+  # The old amd-smi branch took the first '"total"|"size": N' integer anywhere in
+  # `amd-smi static --json`, which can be a cache, partition or BAR size rather
+  # than the framebuffer, and is reported in MB by some releases while the
+  # arithmetic below assumes bytes. rocm-smi's output is parseable per device;
+  # anything else falls through to lspci + --vram.
+  if have rocm-smi; then
+    smi="$(rocm-smi --showmeminfo vram 2>/dev/null || true)"
+    # One "VRAM Total Memory" line per device — that is the device count.
+    GPU_COUNT="$(printf '%s\n' "$smi" | grep -ciE 'vram total memory' || true)"
+    [[ "$GPU_COUNT" =~ ^[0-9]+$ ]] || GPU_COUNT=0
+    bytes="$(printf '%s\n' "$smi" \
+      | grep -iE "^GPU\[$GPU_INDEX\][^0-9]*vram total memory" \
+      | grep -oE '[0-9]{7,}' | head -1 || true)"
+    if [[ -z "$bytes" ]] && (( GPU_COUNT > 0 )); then
+      die "no AMD GPU with index $GPU_INDEX — rocm-smi reports $GPU_COUNT device(s); use --gpu-index 0..$(( GPU_COUNT - 1 ))"
+    fi
   fi
   if [[ -z "$bytes" ]]; then
     # No ROCm tooling: is there an AMD display/compute device at all?
     have lspci && lspci 2>/dev/null | grep -qiE 'VGA|3D|Display' \
       && lspci 2>/dev/null | grep -iE 'VGA|3D|Display' | grep -qi 'AMD/ATI' || return 1
-    GPU_VENDOR="amd"; GPU_COUNT=1
-    GPU_NAME="$(lspci 2>/dev/null | grep -iE 'VGA|3D|Display' | grep -i 'AMD/ATI' | head -1 | cut -d':' -f3- | sed 's/^ //')"
+    GPU_VENDOR="amd"
+    GPU_COUNT="$(lspci 2>/dev/null | grep -iE 'VGA|3D|Display' | grep -ci 'AMD/ATI' || true)"
+    [[ "$GPU_COUNT" =~ ^[0-9]+$ ]] && (( GPU_COUNT > 0 )) || GPU_COUNT=1
+    GPU_NAME="$(lspci 2>/dev/null | grep -iE 'VGA|3D|Display' | grep -i 'AMD/ATI' \
+      | sed -n "$(( GPU_INDEX + 1 ))p" | cut -d':' -f3- | sed 's/^ //')"
+    [[ -n "$GPU_NAME" ]] || GPU_NAME="AMD GPU"
     GPU_VRAM_MB=0
     return 0
   fi
-  GPU_VENDOR="amd"; GPU_COUNT=1
+  GPU_VENDOR="amd"
   GPU_VRAM_MB=$(( bytes / 1024 / 1024 ))
-  GPU_NAME="$(have rocm-smi && rocm-smi --showproductname 2>/dev/null | grep -iE 'card series|product name' | head -1 | cut -d':' -f2- | sed 's/^ *//' || true)"
+  # rocm-smi prints:  GPU[0]<tab><tab>: Card Series: <tab><tab>AMD Radeon RX 7700S
+  # The value therefore starts at the *third* colon-separated field; -f2- kept
+  # the "Card Series:" label and its tabs, which is how HURI_GPU_NAME ended up
+  # as 'Card Series: \t\tAMD Radeon RX 7700S' in plan.env.
+  GPU_NAME="$(rocm-smi --showproductname 2>/dev/null \
+    | grep -iE "^GPU\[$GPU_INDEX\][^:]*:[[:space:]]*card series" \
+    | head -1 | cut -d':' -f3- | tr -s ' \t' ' ' | sed 's/^ *//; s/ *$//' || true)"
   [[ -n "$GPU_NAME" ]] || GPU_NAME="AMD GPU"
   return 0
 }
@@ -419,8 +583,12 @@ detect_gpu() {
   esac
   if [[ -n "$VRAM_OVERRIDE" ]]; then
     GPU_VRAM_MB="$VRAM_OVERRIDE"
-    [[ "$GPU_VENDOR" == "none" ]] && GPU_VENDOR="${PROFILE}"
+    # An `x && y` as the last statement of a function returns 1 when x is false,
+    # which under errexit aborted the whole installer whenever --vram was passed
+    # on a machine where a GPU *was* detected. Hence the explicit if + return 0.
+    if [[ "$GPU_VENDOR" == "none" ]]; then GPU_VENDOR="$PROFILE"; fi
   fi
+  return 0
 }
 
 detect_python() {
@@ -461,6 +629,13 @@ report_detection() {
       "${GPU_DRIVER:+, driver $GPU_DRIVER}"
   fi
   printf '    %-14s %s\n' "python" "${PY_BIN:-<none suitable>} ${PY_VERSION:+($PY_VERSION)}"
+  compute_system_packages
+  if [[ -n "$PKG_MGR" ]]; then
+    printf '    %-14s %s\n' "pkg manager" "$PKG_MGR"
+    printf '    %-14s %s\n' "packages" "${SYS_PKGS[*]:-<none>}"
+  else
+    printf '    %-14s %s\n' "pkg manager" "${C_Y}none detected${C_RST} — install a C toolchain, ffmpeg, libsndfile and portaudio yourself"
+  fi
   printf '    %-14s %s\n' "container" "${HAS_DOCKER:-none}"
   printf '    %-14s %s\n' "ollama" "$( ((HAS_OLLAMA)) && echo installed || echo 'not installed')"
 
@@ -537,6 +712,20 @@ resolve_endpoints() {
 }
 
 plan() {
+  local plan_tts_done=0
+  # An AMD GPU is only usable if the ROCm userspace is there — the wheels link
+  # it dynamically and bundle none of it. Decided here, at the top of the
+  # planner, so that every stage agrees: planning as "amd" and then discovering
+  # the truth during pip is what produced a plan promising GPU STT on a machine
+  # where `import ctranslate2` could not even succeed.
+  if [[ "$GPU_VENDOR" == "amd" ]] && ! rocm_will_be_available; then
+    warn "AMD GPU found, but the ROCm $ROCM_VERSION runtime is missing and this run will not install it"
+    note "planning as CPU-only. To use the GPU, install the runtime and re-run:"
+    rocm_runtime_hint
+    GPU_VENDOR="none"
+    GPU_VRAM_MB=0
+  fi
+
   local pool=0
   if [[ "$GPU_VENDOR" != "none" ]]; then
     pool=$(( GPU_VRAM_MB - RESERVE_VRAM ))
@@ -544,17 +733,51 @@ plan() {
   fi
 
   # --- TTS (CosyVoice3) ------------------------------------------------------
-  # ROCm is deliberately excluded: requirements-amd.txt states CosyVoice2/3 and
-  # EMAGE run on the NVIDIA worker only, so we do not pretend otherwise here.
+  # ROCm stays off the GPU, but NOT for the reason requirements-amd.txt gives
+  # ("CosyVoice runs on the NVIDIA worker only"). Measured on gfx1102 (RX 7700S,
+  # ROCm 7.2, torch 2.8+rocm6.4 — a build that DOES contain gfx1102 kernels):
+  #   * CosyVoice3 imports and loads fine, and the LLM stage runs on the GPU;
+  #   * synthesis then segfaults in the HiFi-GAN vocoder's f0_predictor, inside
+  #     a MIOpen Conv1d (cosyvoice/hifigan/f0_predictor.py -> transformer/
+  #     convolution.py -> torch conv) — with fp16 AND fp32, with stream=True and
+  #     stream=False, and with MIOPEN_DEBUG_CONV_IMPLICIT_GEMM=0 /
+  #     MIOPEN_FIND_MODE=NORMAL / MIOPEN_DEBUG_CONV_WINOGRAD=0.
+  # It is a MIOpen convolution gap on RDNA3, not a packaging choice. CPU works
+  # (~7x slower than realtime for a 0.5B model), so --force-tts lands there.
+  # Re-test on a newer ROCm before flipping this to gpu.
+  # Piper needs no GPU and is faster than realtime on any CPU, so it is simply
+  # always on — this is what makes "voice out" work on every machine rather than
+  # only on NVIDIA hosts.
+  # "auto" takes CosyVoice (voice cloning) only where it actually runs well — an
+  # NVIDIA GPU with room for it — and falls back to piper everywhere else.
+  local tts_auto=0
+  if [[ "$TTS_ENGINE" == "auto" ]]; then
+    tts_auto=1
+    if [[ "$GPU_VENDOR" == "nvidia" ]] && (( pool >= VRAM_TTS_FP16 )); then
+      TTS_ENGINE="cosyvoice"
+    else
+      TTS_ENGINE="piper"
+    fi
+  fi
+  if [[ "$TTS_ENGINE" == "piper" ]]; then
+    P_TTS_DEV="cpu"
+    P_TTS_WHY="piper (onnx) — ~30x faster than realtime, no GPU needed"
+    (( tts_auto )) && P_TTS_WHY="auto: no NVIDIA GPU with $(mb_to_gb $VRAM_TTS_FP16) GiB free — piper (onnx), no GPU needed"
+    plan_tts_done=1
+  fi
+
   local tts_cost=$VRAM_TTS_FP16
-  if [[ "$GPU_VENDOR" == "nvidia" ]] && (( pool >= tts_cost )); then
+  if (( ${plan_tts_done:-0} )); then
+    :
+  elif [[ "$GPU_VENDOR" == "nvidia" ]] && (( pool >= tts_cost )); then
     P_TTS_DEV="gpu"; P_TTS_VRAM=$tts_cost; pool=$(( pool - tts_cost ))
     P_TTS_WHY="fp16 on $GPU_NAME"
+    (( tts_auto )) && P_TTS_WHY="auto: fp16 on $GPU_NAME (--tts-engine piper to keep the VRAM)"
   elif [[ "$GPU_VENDOR" == "amd" ]]; then
     if (( FORCE_TTS )); then
-      P_TTS_DEV="cpu"; P_TTS_WHY="forced; ROCm build has no CosyVoice stack (see requirements-amd.txt)"
+      P_TTS_DEV="cpu"; P_TTS_WHY="forced onto CPU; ROCm vocoder crashes in MIOpen conv (~7x realtime)"
     else
-      P_TTS_DEV="off"; P_TTS_WHY="CosyVoice is not supported on ROCm (--force-tts runs it on CPU)"
+      P_TTS_DEV="off"; P_TTS_WHY="ROCm vocoder crashes in MIOpen conv (--force-tts runs it on CPU)"
     fi
   elif (( FORCE_TTS )); then
     P_TTS_DEV="cpu"; P_TTS_WHY="forced onto CPU — expect several seconds per sentence"
@@ -701,6 +924,49 @@ plan() {
   fi
   P_MODULES="$(IFS=,; echo "${mods[*]}")"
 
+  # --- Explicit overrides ----------------------------------------------------
+  # Applied HERE: after the plan is formed but before the GPU fractions, RAM and
+  # disk budgets below read these values. Applying them later would leave the
+  # arithmetic computed for the device/module set the user just overrode.
+  if [[ -n "$STT_DEVICE_OVERRIDE" ]]; then
+    case "$STT_DEVICE_OVERRIDE" in
+      gpu)
+        [[ "$GPU_VENDOR" == "none" ]] && die "--stt-device gpu but no usable GPU was detected"
+        P_STT_DEV="gpu"; P_STT_VRAM="${VRAM_STT[$STT_SIZE]}"
+        P_STT_WHY="forced onto the GPU (--stt-device gpu)" ;;
+      cpu)
+        P_STT_DEV="cpu"; P_STT_VRAM=0
+        P_STT_WHY="forced onto CPU (--stt-device cpu) — int8 on $CPU_CORES cores" ;;
+    esac
+  fi
+
+  if [[ -n "$MODULES_OVERRIDE" ]]; then
+    local known="mic stt tag emo eag qag rag tts gesture" m bad=()
+    local -a wanted=()
+    IFS=',' read -r -a wanted <<<"$MODULES_OVERRIDE"
+    for m in "${wanted[@]}"; do
+      m="${m// /}"
+      [[ -z "$m" ]] && continue
+      [[ " $known " == *" $m "* ]] || bad+=("$m")
+    done
+    (( ${#bad[@]} )) && die "--modules lists unknown module(s): ${bad[*]}. Known: $known"
+    P_MODULES="$(IFS=,; echo "${wanted[*]// /}")"
+    # Keep the device plan consistent with the explicit list, so the budgets and
+    # the generated deployments match what was asked for.
+    if [[ ",$P_MODULES," != *",tts,"* && "$P_TTS_DEV" != "off" ]]; then
+      P_TTS_DEV="off"; P_TTS_WHY="not in --modules"
+    fi
+    if [[ ",$P_MODULES," != *",gesture,"* && "$P_GES_DEV" != "off" ]]; then
+      P_GES_DEV="off"; P_GES_WHY="not in --modules"
+    fi
+    if [[ ",$P_MODULES," != *",emo,"* && "$P_EMO_DEV" != "off" ]]; then
+      P_EMO_DEV="off"; P_EMO_WHY="not in --modules"
+    fi
+    if [[ ",$P_MODULES," != *",stt,"* && "$P_STT_DEV" == "gpu" ]]; then
+      P_STT_DEV="cpu"; P_STT_VRAM=0; P_STT_WHY="stt not in --modules"
+    fi
+  fi
+
   # --- Ray resources ---------------------------------------------------------
   if [[ "$GPU_VENDOR" != "none" ]]; then
     [[ "$P_TTS_DEV" == "gpu" ]] && P_TTS_FRAC="$(frac "$P_TTS_VRAM")"
@@ -712,7 +978,13 @@ plan() {
   # --- RAM / disk requirement ------------------------------------------------
   P_RAM_NEED=$RAM_BASE
   [[ "$P_STT_DEV" == "cpu" ]] && P_RAM_NEED=$(( P_RAM_NEED + RAM_STT[$STT_SIZE] ))
-  [[ "$P_TTS_DEV" == "cpu" ]] && P_RAM_NEED=$(( P_RAM_NEED + RAM_TTS_CPU ))
+  if [[ "$P_TTS_DEV" == "cpu" ]]; then
+    if [[ "$TTS_ENGINE" == "piper" ]]; then
+      P_RAM_NEED=$(( P_RAM_NEED + RAM_TTS_PIPER ))
+    else
+      P_RAM_NEED=$(( P_RAM_NEED + RAM_TTS_CPU ))
+    fi
+  fi
   [[ "$P_GES_DEV" == "cpu" ]] && P_RAM_NEED=$(( P_RAM_NEED + RAM_GESTURE_CPU ))
   [[ "$P_EMO_DEV" == "cpu" ]] && P_RAM_NEED=$(( P_RAM_NEED + RAM_EMO_PER_SESSION ))
   [[ "$P_LLM_DEV" == "cpu" ]] && P_RAM_NEED=$(( P_RAM_NEED + P_LLM_RAM ))
@@ -723,7 +995,13 @@ plan() {
     amd)    P_DISK_NEED=$(( P_DISK_NEED + DISK_TORCH_ROCM )) ;;
     *)      P_DISK_NEED=$(( P_DISK_NEED + DISK_TORCH_CPU )) ;;
   esac
-  [[ "$P_TTS_DEV" != "off" ]] && P_DISK_NEED=$(( P_DISK_NEED + DISK_COSYVOICE ))
+  if [[ "$P_TTS_DEV" != "off" ]]; then
+    if [[ "$TTS_ENGINE" == "piper" ]]; then
+      P_DISK_NEED=$(( P_DISK_NEED + DISK_PIPER ))
+    else
+      P_DISK_NEED=$(( P_DISK_NEED + DISK_COSYVOICE ))
+    fi
+  fi
   [[ "$P_GES_DEV" != "off" ]] && P_DISK_NEED=$(( P_DISK_NEED + DISK_EMAGE ))
   [[ "$P_EMO_DEV" != "off" ]] && P_DISK_NEED=$(( P_DISK_NEED + DISK_EMOTION ))
   if (( ! SKIP_SERVICES )); then
@@ -780,9 +1058,15 @@ report_plan() {
   else
     mem_why="standalone binary"
   fi
+  local tts_backend="CosyVoice3-0.5B"
+  [[ "$TTS_ENGINE" == "piper" ]] && tts_backend="piper $PIPER_VOICE_NAME"
   case "$P_TTS_DEV" in
     gpu) tts_budget="$(mb_to_gb "$P_TTS_VRAM") GiB vram" ;;
-    cpu) tts_budget="$(mb_to_gb "$RAM_TTS_CPU") GiB ram" ;;
+    cpu) if [[ "$TTS_ENGINE" == "piper" ]]; then
+           tts_budget="$(mb_to_gb "$RAM_TTS_PIPER") GiB ram"
+         else
+           tts_budget="$(mb_to_gb "$RAM_TTS_CPU") GiB ram"
+         fi ;;
     *)   tts_budget="-" ;;
   esac
   case "$P_GES_DEV" in
@@ -797,7 +1081,7 @@ report_plan() {
   printf '    %s\n' "$(printf '─%.0s' {1..96})"
   row "stt"     "faster-whisper $STT_SIZE" "$P_STT_DEV" "$stt_budget" "$P_STT_WHY"
   row "rag/llm" "$llm_backend"             "$P_LLM_DEV" "$llm_budget" "$P_LLM_WHY"
-  row "tts"     "CosyVoice3-0.5B"          "$P_TTS_DEV" "$tts_budget" "$P_TTS_WHY"
+  row "tts"     "$tts_backend"          "$P_TTS_DEV" "$tts_budget" "$P_TTS_WHY"
   row "gesture" "EMAGE audio"              "$P_GES_DEV" "$ges_budget" "$P_GES_WHY"
   row "emo"     "hubert-large-superb-er"   "$P_EMO_DEV" "$emo_budget" "$P_EMO_WHY"
   row "embed"   "$embed_backend"           "$P_EMBED_DEV" \
@@ -881,47 +1165,125 @@ EOF
 # 3. Stage: system packages
 # =============================================================================
 
+SYS_PKGS=()
+
+# compute_system_packages — fills the global SYS_PKGS array for $PKG_MGR.
+# Called during detection (to display the plan) and again before installing.
+#
+# webrtcvad compiles from source (needs a toolchain + Python headers),
+# sounddevice dlopens libportaudio, soundfile needs libsndfile, and
+# librosa/openai-whisper shell out to ffmpeg.
+compute_system_packages() {
+  SYS_PKGS=()
+  case "$PKG_MGR" in
+    apt)    SYS_PKGS=(build-essential git curl ca-certificates pkg-config unzip
+                  ffmpeg libsndfile1 libportaudio2 python3-dev) ;;
+    dnf)    SYS_PKGS=(gcc gcc-c++ make git curl unzip ffmpeg-free libsndfile portaudio python3-devel) ;;
+    pacman) SYS_PKGS=(base-devel git curl unzip ffmpeg libsndfile portaudio) ;;
+    zypper) SYS_PKGS=(gcc gcc-c++ make git curl unzip ffmpeg libsndfile1 portaudio python3-devel) ;;
+    *)      return 0 ;;
+  esac
+
+  # Ubuntu/Debian: creating a venv from the *system* python also needs the
+  # matching python3.X-venv package, and the sdist builds (webrtcvad, pyworld)
+  # need the headers for *that* interpreter — generic python3-dev is the wrong
+  # version when it is not the distro default (deadsnakes on 22.04). Only for an
+  # apt-owned interpreter (base prefix /usr): pyenv/uv/conda builds ship their
+  # own headers and venv, and their version often has no apt package at all
+  # (Debian 13 only packages 3.13, so python3.12-venv does not exist there).
+  if [[ "$PKG_MGR" == "apt" && -n "$PY_VERSION" ]] \
+     && [[ "$("$PY_BIN" -c 'import sys;print(sys.base_prefix)' 2>/dev/null)" == "/usr" ]]; then
+    local pyxy; pyxy="python$(cut -d. -f1,2 <<<"$PY_VERSION")"
+    SYS_PKGS+=("$pyxy-venv" "$pyxy-dev")
+  fi
+
+  # ROCm userspace for the AMD profile. Without it the repo.radeon.com torch
+  # wheels and the ROCm CTranslate2 build cannot even be imported.
+  if [[ "$GPU_VENDOR" == "amd" ]]; then
+    case "$PKG_MGR" in
+      pacman) SYS_PKGS+=("${ROCM_PKGS_PACMAN[@]}") ;;
+      apt)    SYS_PKGS+=("${ROCM_PKGS_APT[@]}") ;;
+      *)      : ;;   # dnf/zypper: ROCm naming differs too much to guess
+    esac
+  fi
+}
+
+# Ubuntu/Debian only: the ROCm packages live in AMD's own repository, not in
+# main/universe. Mirrors deploy/Dockerfile.amd:11-15, but derives the codename
+# instead of hardcoding jammy and creates the keyring dir (absent on 22.04).
+add_rocm_apt_repo() {
+  local codename
+  codename="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")"
+  if [[ -z "$codename" ]]; then
+    warn "cannot determine the apt codename — add the ROCm repo manually"
+    return 0
+  fi
+  if [[ -r /etc/apt/sources.list.d/rocm.list ]]; then
+    ok "ROCm apt repo already configured"
+    return 0
+  fi
+  local sudo_cmd=""; [[ $EUID -ne 0 ]] && sudo_cmd="sudo"
+  info "  adding the ROCm $ROCM_VERSION apt repository ($codename)"
+  run ${sudo_cmd:+$sudo_cmd} mkdir -p --mode=0755 /etc/apt/keyrings
+  run bash -c "curl -fsSL --retry 3 https://repo.radeon.com/rocm/rocm.gpg.key \
+    | gpg --dearmor | ${sudo_cmd:+$sudo_cmd }tee /etc/apt/keyrings/rocm.gpg >/dev/null"
+  run bash -c "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] \
+https://repo.radeon.com/rocm/apt/$ROCM_VERSION $codename main' \
+    | ${sudo_cmd:+$sudo_cmd }tee /etc/apt/sources.list.d/rocm.list >/dev/null"
+}
+
 install_system_packages() {
   stage_enabled system || return 0
   (( SKIP_SYSTEM )) && { note "system packages skipped (--skip-system)"; return 0; }
   step "System packages"
 
-  # webrtcvad compiles from source (needs a toolchain + Python headers),
-  # sounddevice dlopens libportaudio, soundfile needs libsndfile, and
-  # librosa/openai-whisper shell out to ffmpeg.
-  local pkgs=()
-  case "$PKG_MGR" in
-    apt)    pkgs=(build-essential git curl ca-certificates pkg-config unzip
-                  ffmpeg libsndfile1 libportaudio2 python3-dev) ;;
-    dnf)    pkgs=(gcc gcc-c++ make git curl unzip ffmpeg-free libsndfile portaudio python3-devel) ;;
-    pacman) pkgs=(base-devel git curl unzip ffmpeg libsndfile portaudio) ;;
-    zypper) pkgs=(gcc gcc-c++ make git curl unzip ffmpeg libsndfile1 portaudio python3-devel) ;;
-    *)      warn "unknown package manager — install a C toolchain, ffmpeg, libsndfile and portaudio yourself"
-            return 0 ;;
-  esac
-
-  # Ubuntu/Debian: creating a venv from the *system* python also needs the
-  # matching python3.X-venv package (pyenv/uv interpreters ship it already).
-  if [[ "$PKG_MGR" == "apt" && "$PY_BIN" == /usr/bin/* ]]; then
-    pkgs+=("python$(cut -d. -f1,2 <<<"$PY_VERSION")-venv")
-  fi
-
-  local sudo_cmd=""
-  [[ $EUID -ne 0 ]] && sudo_cmd="sudo"
-  if [[ -n "$sudo_cmd" ]] && ! have sudo; then
-    warn "no sudo available; install manually: ${pkgs[*]}"
+  compute_system_packages
+  local pkgs=("${SYS_PKGS[@]}")
+  if [[ -z "$PKG_MGR" ]]; then
+    warn "unknown package manager — install a C toolchain, ffmpeg, libsndfile and portaudio yourself"
     return 0
   fi
+
+  # These packages are not optional — webrtcvad and the ROCm runtime are hard
+  # requirements — so a missing sudo has to stop the install, not warn and carry
+  # on until pip fails with something unrelated.
+  local sudo_cmd=""
+  [[ $EUID -ne 0 ]] && sudo_cmd="sudo"
+  if [[ -n "$sudo_cmd" ]]; then
+    if ! have sudo; then
+      die "no sudo and not root. Install these yourself, then re-run with --skip-system: ${pkgs[*]}"
+    elif ! sudo -n true 2>/dev/null; then
+      note "sudo will ask for your password"
+    fi
+  fi
+
+  [[ "$PKG_MGR" == "apt" && "$GPU_VENDOR" == "amd" ]] && add_rocm_apt_repo
 
   info "  installing: ${pkgs[*]}"
   case "$PKG_MGR" in
     apt)    run ${sudo_cmd:+$sudo_cmd} apt-get update -qq
             run ${sudo_cmd:+$sudo_cmd} env DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}" ;;
     dnf)    run ${sudo_cmd:+$sudo_cmd} dnf install -y "${pkgs[@]}" ;;
-    pacman) run ${sudo_cmd:+$sudo_cmd} pacman -S --needed --noconfirm "${pkgs[@]}" ;;
+            # -Sy, not -S: without a synced database --needed can resolve against
+            # a stale index and fail on a package that does exist.
+    pacman) run ${sudo_cmd:+$sudo_cmd} pacman -Sy --needed --noconfirm "${pkgs[@]}" ;;
     zypper) run ${sudo_cmd:+$sudo_cmd} zypper install -y "${pkgs[@]}" ;;
   esac
   ok "system packages ready"
+
+  # ROCm talks to the kernel through /dev/kfd and /dev/dri/renderD*. On Ubuntu
+  # those are 0660 root:render, so group membership is a hard requirement there;
+  # on Arch they are usually 0666 and this is a no-op.
+  if [[ "$GPU_VENDOR" == "amd" ]]; then
+    if [[ ! -r /dev/kfd || ! -w /dev/kfd ]]; then
+      warn "no read/write access to /dev/kfd — ROCm cannot use the GPU"
+      note "sudo usermod -aG render,video $USER   # then log out and back in"
+    elif ! id -nG 2>/dev/null | grep -qw render; then
+      note "you are not in the 'render' group; /dev/kfd is world-accessible here so"
+      note "it works, but add yourself if GPU access ever starts failing:"
+      note "sudo usermod -aG render,video $USER"
+    fi
+  fi
 }
 
 # =============================================================================
@@ -941,7 +1303,13 @@ create_venv() {
     local existing
     existing="$("$VENV_DIR/bin/python" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo "?")"
     case "$existing" in
-      3.10|3.11|3.12) ok "virtualenv exists: $VENV_DIR (python $existing)"; return 0 ;;
+      3.10|3.11|3.12)
+        # A `uv venv` without --seed produces a venv with no pip at all, and the
+        # first `$PIP install` then fails with a bare "no such file".
+        [[ -x "$VENV_DIR/bin/pip" ]] \
+          || die "$VENV_DIR has no pip — run '$VENV_DIR/bin/python -m ensurepip --upgrade', or delete the venv and re-run"
+        ok "virtualenv exists: $VENV_DIR (python $existing)"
+        return 0 ;;
       *) die "$VENV_DIR runs python $existing (need 3.10–3.12) — delete it, or pass --venv <other path>" ;;
     esac
   fi
@@ -957,9 +1325,43 @@ install_python_deps() {
   create_venv
   (( DRY_RUN )) && { VPY="python"; PIP="pip"; }
 
-  run "$PIP" install --upgrade pip setuptools wheel
-
+  # constraints.txt must be on EVERY pip call (its own header says so): the
+  # setuptools<82 cap is what keeps `import webrtcvad` working, and protobuf<5
+  # is what keeps Serve replicas from dying on FieldDescriptor.label. This
+  # upgrade used to run before C was defined and without it, pulling the newest
+  # setuptools and relying on a later resolution to walk it back.
   local C=(-c "$REPO_ROOT/constraints.txt")
+  run "$PIP" install "${C[@]}" --upgrade pip setuptools wheel
+
+  # ABI tag of the interpreter that will actually receive the wheels. The ROCm
+  # URLs and the CTranslate2 zip member used to hardcode cp312 while
+  # detect_python/create_venv accept 3.10-3.12 — on a 3.10/3.11 venv pip then
+  # rejected the wheel as "not supported on this platform". repo.radeon.com
+  # publishes cp310-cp313 and the CTranslate2 zip carries cp39-cp314, so
+  # deriving the tag is strictly better than narrowing the supported range.
+  local PYTAG
+  if (( DRY_RUN )); then
+    # VPY is the bare "python" under --dry-run, which is the *system*
+    # interpreter (3.14 on Arch today) and would print a misleading tag.
+    PYTAG="cp${PY_VERSION%.*}"
+  else
+    PYTAG="$("$VPY" -c 'import sys;print("cp%d%d"%sys.version_info[:2])' 2>/dev/null || echo "cp${PY_VERSION%.*}")"
+  fi
+  PYTAG="${PYTAG//./}"
+
+  # An AMD plan with no ROCm userspace cannot work, and installing the ROCm
+  # CTranslate2 wheel would also destroy the CPU fallback (HIP is DT_NEEDED on
+  # _ext, not dlopened). Decide that here, before downloading ~7 GB of wheels.
+  if [[ "$GPU_VENDOR" == "amd" ]] && ! rocm_have_runtime; then
+    warn "no ROCm $ROCM_VERSION runtime found (libamdhip64.so.7 is not on the loader path)"
+    note "falling back to a CPU install: CPU torch, CPU STT."
+    note "For GPU support install the runtime and re-run:"
+    rocm_runtime_hint
+    GPU_VENDOR="none"
+    P_STT_DEV="cpu"; P_STT_FRAC=0; P_STT_WHY="ROCm userspace missing; int8 on CPU"
+    P_RAY_GPUS=0
+    [[ "$P_EMO_DEV" != "off" ]] && P_EMO_DEV="cpu"
+  fi
 
   # 1. Vendor torch FIRST, so every later resolution (sentence-transformers,
   #    transformers, faster-whisper) sees a satisfying torch and does not pull
@@ -971,12 +1373,24 @@ install_python_deps() {
         "torch==$TORCH_CUDA_VERSION" "torchaudio==$TORCH_CUDA_VERSION"
       ;;
     amd)
-      info "  torch 2.8 (ROCm $ROCM_VERSION) from repo.radeon.com"
-      run "$PIP" install "${C[@]}" \
-        "https://repo.radeon.com/rocm/manylinux/rocm-rel-${ROCM_VERSION}/triton-${ROCM_TRITON_VERSION}-cp312-cp312-linux_x86_64.whl"
-      run "$PIP" install "${C[@]}" --extra-index-url https://repo.radeon.com/rocm/pypi/ \
-        "https://repo.radeon.com/rocm/manylinux/rocm-rel-${ROCM_VERSION}/${ROCM_TORCH_WHEEL}-cp312-cp312-linux_x86_64.whl" \
-        "https://repo.radeon.com/rocm/manylinux/rocm-rel-${ROCM_VERSION}/${ROCM_TORCHAUDIO_WHEEL}-cp312-cp312-linux_x86_64.whl"
+      # download.pytorch.org, NOT repo.radeon.com. AMD's ".lw." (lightweight)
+      # wheels are built for data centre parts and omit consumer RDNA3: on a
+      # gfx1102 (RX 7600/7700S) torch.cuda.is_available() returns True and the
+      # device name resolves, then EVERY kernel launch aborts inside HIP with
+      #   hip_code_object.cpp:400: Assertion `err == hipSuccess' failed
+      # which reads like a hardware fault. Verified arch lists, same torch 2.8.0:
+      #   repo.radeon.com   : gfx908 gfx90a gfx942 gfx1030 gfx1100 gfx1101 …  (no gfx1102)
+      #   download.pytorch.org: gfx900 … gfx1030 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201
+      # The official wheels are also self-contained (they bundle their ROCm libs),
+      # so they do not depend on the system ROCm version matching exactly.
+      info "  torch $TORCH_ROCM_VERSION ($TORCH_ROCM_FLAVOUR) from download.pytorch.org"
+      run "$PIP" install "${C[@]}" --index-url "$TORCH_ROCM_INDEX" \
+        "torch==${TORCH_ROCM_VERSION}+${TORCH_ROCM_FLAVOUR}" \
+        "torchaudio==${TORCH_ROCM_VERSION}+${TORCH_ROCM_FLAVOUR}"
+      # Before requirements.txt, so faster-whisper sees a satisfying ctranslate2
+      # and pip does not download the CUDA build from PyPI just to have it
+      # replaced a moment later.
+      install_ct2_rocm "$PYTAG"
       ;;
     none)
       info "  torch $TORCH_CUDA_VERSION (cpu)"
@@ -986,14 +1400,17 @@ install_python_deps() {
   esac
 
   # 2. Server + client base (ray[serve], faster-whisper, qdrant, sounddevice…).
+  #    serve_requirements.txt first: it is what deploy/Dockerfile.base installs,
+  #    and it carries caps (click<8.2, httpx, qdrant-client) that requirements.txt
+  #    does not. Installing only requirements.txt made bare metal diverge from the
+  #    images.
+  info "  serve base requirements"
+  run "$PIP" install "${C[@]}" -r "$REPO_ROOT/serve_requirements.txt"
   info "  base requirements"
   run "$PIP" install "${C[@]}" -r "$REPO_ROOT/requirements.txt"
 
-  # 3. Per-vendor GPU stack, mirroring deploy/Dockerfile.{amd,nvidia}.
-  if [[ "$GPU_VENDOR" == "amd" ]]; then
-    install_ct2_rocm
-    run "$PIP" install "${C[@]}" -r "$REPO_ROOT/requirements-amd.txt"
-  fi
+  # 3. (The ROCm CTranslate2 wheel is installed in step 1, alongside torch; the
+  #    AMD requirements file is installed last, in step 5 — see the note there.)
 
   # 4. TTS/gesture extras. On NVIDIA use the pinned file verbatim (same set as
   #    the image); elsewhere derive a CPU-safe variant from it so the pins stay
@@ -1010,8 +1427,30 @@ install_python_deps() {
     fi
   fi
 
-  # 5. CosyVoice source tree (no setup.py upstream → clone + PYTHONPATH).
-  [[ "$P_TTS_DEV" != "off" ]] && install_cosyvoice
+  # 5. AMD extras LAST, exactly like deploy/Dockerfile.amd:79-81. This ordering
+  #    matters: requirements-amd.txt pins transformers for the ROCm torch 2.8
+  #    wheel, and the step-4 file inherits a different pin from
+  #    requirements-nvidia.txt. Installed earlier, the AMD pin was silently
+  #    overwritten, and *which* version you ended up with depended on whether
+  #    emo/tts/gesture happened to be enabled.
+  if [[ "$GPU_VENDOR" == "amd" ]]; then
+    info "  AMD/ROCm extras (requirements-amd.txt)"
+    run "$PIP" install "${C[@]}" -r "$REPO_ROOT/requirements-amd.txt"
+  fi
+
+  # 6. TTS engine.
+  if [[ "$P_TTS_DEV" != "off" ]]; then
+    if [[ "$TTS_ENGINE" == "piper" ]]; then
+      # abi3 wheel (py3.9+, x86_64 and aarch64), and its only runtime deps are
+      # onnxruntime + pathvalidate — no torch, so nothing here can disturb the
+      # vendor torch installed above.
+      info "  piper-tts (onnx, no torch)"
+      run "$PIP" install "${C[@]}" piper-tts
+    else
+      # CosyVoice has no setup.py upstream → clone + PYTHONPATH.
+      install_cosyvoice
+    fi
+  fi
 
   ok "python environment ready"
 }
@@ -1022,7 +1461,34 @@ generate_cpu_requirements() {
   # the EMAGE *rendering/training* extras — src/modules/gesture/emage only needs
   # torch + transformers + omegaconf + huggingface_hub.
   local out="$STATE_DIR/requirements-local.generated.txt" p
-  local drop='^(torch|torchaudio|onnxruntime-gpu|smplx|pyrender|trimesh|imageio|lightning|gdown|wget|pyworld)([=<>~]|$)'
+  # Always safe to drop: torch/torchaudio come from the vendor index above, and
+  # onnxruntime-gpu is swapped for the CPU build below.
+  local -a drop_pkgs=(torch torchaudio onnxruntime-gpu)
+  # EMAGE render/training extras — only needed with gesture generation on.
+  local -a emage_only=(smplx pyrender trimesh imageio)
+  # These look like EMAGE extras but CosyVoice needs them at *inference* time:
+  #   lightning, gdown, wget  — imported transitively through Matcha-TTS
+  #                             (matcha/models/baselightningmodule.py,
+  #                              matcha/utils/utils.py)
+  #   pyworld                 — cosyvoice3.yaml names classes in
+  #                             cosyvoice.dataset.processor, and HyperPyYAML
+  #                             resolves them with pydoc.locate when the model
+  #                             loads, so the "training only" module is imported
+  #                             regardless. pyworld has no cp312 wheel and builds
+  #                             from sdist (needs the C toolchain SYS_PKGS
+  #                             already installs).
+  local -a cosyvoice_needs=(lightning gdown wget pyworld)
+  if [[ "$P_GES_DEV" == "off" ]]; then
+    drop_pkgs+=("${emage_only[@]}")
+  fi
+  if [[ "$P_TTS_DEV" == "off" ]]; then
+    drop_pkgs+=("${cosyvoice_needs[@]}")
+  fi
+  # On ROCm, requirements-amd.txt owns the transformers pin and is installed
+  # last (step 5). Leaving it in here too made the two files fight, and the
+  # winner depended on which modules were enabled.
+  [[ "$GPU_VENDOR" == "amd" ]] && drop_pkgs+=(transformers)
+  local drop="^($(IFS='|'; echo "${drop_pkgs[*]}"))([=<>~]|\$)"
   {
     echo "# Generated by scripts/install_local.sh from requirements-nvidia.txt."
     echo "# Vendor: ${GPU_VENDOR}. Do not edit — re-run the installer instead."
@@ -1033,22 +1499,59 @@ generate_cpu_requirements() {
     else
       # No CosyVoice: gesture + emotion only.
       for p in transformers librosa soundfile omegaconf huggingface_hub numpy; do
+        # Skip anything the vendor file already pins — it is installed last.
+        if [[ "$GPU_VENDOR" == "amd" ]] \
+           && grep -qiE "^[[:space:]]*${p}[=<>~]" "$REPO_ROOT/requirements-amd.txt" 2>/dev/null; then
+          continue
+        fi
         pin_of "$p" requirements-nvidia.txt
       done
     fi
   } | write_file "$out"
 }
 
+# install_ct2_rocm <python abi tag> — replace the PyPI (CUDA) CTranslate2 with
+# the ROCm build. Only safe once the HIP runtime exists: the ROCm wheel links
+# libamdhip64/libhipblas/libhiprand as DT_NEEDED on _ext rather than dlopening
+# them, so without the runtime even `device="cpu"` stops working — the failure
+# is at import, before any device string is read.
 install_ct2_rocm() {
-  info "  CTranslate2 (ROCm wheel)"
+  local pytag="${1:-cp312}"
+  if ! rocm_have_runtime; then
+    warn "skipping the ROCm CTranslate2 wheel — no HIP runtime, it would break CPU STT too"
+    return 0
+  fi
+  info "  CTranslate2 (ROCm wheel, $pytag)"
   local tmp="$STATE_DIR/ct2"
   run mkdir -p "$tmp"
-  run curl -fsSL "$CT2_ROCM_URL" -o "$tmp/ct2-rocm.zip"
-  run unzip -o -j "$tmp/ct2-rocm.zip" 'temp-linux/ctranslate2-4.7.1-cp312-*manylinux*x86_64.whl' -d "$tmp"
+  # 284 MB: keep it between runs instead of re-downloading on every --only python.
+  if [[ -s "$tmp/ct2-rocm.zip" ]]; then
+    note "reusing $tmp/ct2-rocm.zip"
+  else
+    run curl -fsSL --retry 3 --retry-delay 2 --retry-connrefused \
+      "$CT2_ROCM_URL" -o "$tmp/ct2-rocm.zip"
+  fi
+  run unzip -o -j "$tmp/ct2-rocm.zip" "temp-linux/ctranslate2-4.7.1-${pytag}-*manylinux*x86_64.whl" -d "$tmp"
   if (( ! DRY_RUN )); then
-    local whl; whl="$(find "$tmp" -name 'ctranslate2-4.7.1-cp312-*.whl' | head -1)"
-    [[ -n "$whl" ]] || die "no CTranslate2 ROCm wheel in $CT2_ROCM_URL"
-    run "$PIP" install "$whl"
+    local whl; whl="$(find "$tmp" -name "ctranslate2-4.7.1-${pytag}-*.whl" | head -1)"
+    [[ -n "$whl" ]] || die "no $pytag CTranslate2 ROCm wheel in $CT2_ROCM_URL"
+    # --force-reinstall --no-deps is load-bearing: the ROCm wheel carries the
+    # SAME version string (4.7.1) as the PyPI CPU/CUDA build, so a plain
+    # `pip install <wheel>` reports "Requirement already satisfied" and silently
+    # keeps whichever build is there. That is how STT ended up running the CPU
+    # wheel while the log said "CTranslate2 (ROCm wheel)". --no-deps because its
+    # dependencies are already pinned by the files installed above.
+    run "$PIP" install "${C[@]}" --force-reinstall --no-deps "$whl"
+    # Fail here, with the loader error in hand, rather than at the first
+    # utterance inside a Serve replica.
+    local probe
+    if ! probe="$("$VPY" -c 'import ctranslate2; print("ctranslate2", ctranslate2.__version__, "gpus:", ctranslate2.get_cuda_device_count())' 2>&1)"; then
+      err "the ROCm CTranslate2 wheel does not load:"
+      note "$probe"
+      rocm_runtime_hint
+      die "CTranslate2 (ROCm) is unusable — STT cannot run"
+    fi
+    ok "$probe"
   fi
 }
 
@@ -1087,15 +1590,33 @@ download_models() {
   # --- STT: faster-whisper (presence marker: model.bin, as in the Helm job) ---
   local whisper_repo="${WHISPER_REPO_PREFIX}-${STT_SIZE}"
   local whisper_dir="$MODELS_DIR/whisper/$whisper_repo"
-  if [[ -f "$whisper_dir/model.bin" ]]; then
+  # model.bin alone is not enough: an interrupted snapshot leaves it in place
+  # while the tokenizer/config are missing, and the install then "succeeds" with
+  # an STT model that cannot load.
+  if [[ -f "$whisper_dir/model.bin" && -f "$whisper_dir/config.json" \
+        && -f "$whisper_dir/tokenizer.json" && -f "$whisper_dir/vocabulary.txt" ]]; then
     ok "whisper: already at $whisper_dir"
   else
+    [[ -f "$whisper_dir/model.bin" ]] && warn "whisper snapshot at $whisper_dir is incomplete — re-downloading"
     info "  whisper $STT_SIZE → $whisper_dir"
     hf_snapshot "$whisper_repo" "$whisper_dir"
   fi
 
+  # --- TTS: piper voice (61 MB ONNX + its json sidecar) ---
+  if [[ "$P_TTS_DEV" != "off" && "$TTS_ENGINE" == "piper" ]]; then
+    local piper_dir="$MODELS_DIR/piper"
+    local piper_onnx="$piper_dir/$PIPER_VOICE_NAME.onnx"
+    if [[ -f "$piper_onnx" && -f "$piper_onnx.json" ]]; then
+      ok "piper voice: already at $piper_onnx"
+    else
+      info "  piper voice $PIPER_VOICE_NAME → $piper_dir"
+      run mkdir -p "$piper_dir"
+      run "$VPY" -m piper.download_voices --download-dir "$piper_dir" "$PIPER_VOICE_NAME"
+    fi
+  fi
+
   # --- TTS: CosyVoice3 from ModelScope (markers: cosyvoice3.yaml + llm.pt) ---
-  if [[ "$P_TTS_DEV" != "off" ]]; then
+  if [[ "$P_TTS_DEV" != "off" && "$TTS_ENGINE" == "cosyvoice" ]]; then
     local cosy_dir="$MODELS_DIR/cosytts/$COSYTTS_MODEL_ID"
     if [[ -f "$cosy_dir/cosyvoice3.yaml" && -f "$cosy_dir/llm.pt" ]]; then
       ok "cosyvoice3: already at $cosy_dir"
@@ -1155,8 +1676,10 @@ PY
 # =============================================================================
 
 start_qdrant() {
-  if curl -fsS --max-time 2 http://localhost:6333/readyz >/dev/null 2>&1; then
-    ok "qdrant already listening on :6333"; return 0
+  if curl -fsS --max-time 2 "${QDRANT_URL%/}/readyz" >/dev/null 2>&1; then
+    ok "qdrant already listening at $QDRANT_URL"
+    note "not managed by HuRI — start.sh will check it but cannot start it"
+    return 0
   fi
   local data="$STATE_DIR/qdrant"
   run mkdir -p "$data"
@@ -1165,17 +1688,30 @@ start_qdrant() {
     if (( ! DRY_RUN )) && "$HAS_DOCKER" ps -a --format '{{.Names}}' 2>/dev/null | grep -qx huri-qdrant; then
       run "$HAS_DOCKER" start huri-qdrant
     else
+      # Qdrant always listens on 6333/6334 *inside* the container; only the
+      # published host ports follow --qdrant-url.
       run "$HAS_DOCKER" run -d --name huri-qdrant --restart unless-stopped \
-        -p 6333:6333 -p 6334:6334 -v "$data:/qdrant/storage" "$QDRANT_IMAGE"
+        -p "$QDRANT_PORT:6333" -p "$QDRANT_GRPC_PORT:6334" \
+        -v "$data:/qdrant/storage" "$QDRANT_IMAGE"
     fi
   else
     info "  installing standalone qdrant binary (no container runtime found)"
-    local url="https://github.com/qdrant/qdrant/releases/download/${QDRANT_VERSION#v}/qdrant-x86_64-unknown-linux-gnu.tar.gz"
+    # The release tag IS "v1.12.4" — stripping the v gave a 404 on every host
+    # without docker, and the error was swallowed into a warning while start.sh
+    # went on to look for a binary that was never installed.
+    local url="https://github.com/qdrant/qdrant/releases/download/${QDRANT_VERSION}/qdrant-x86_64-unknown-linux-gnu.tar.gz"
     run mkdir -p "$STATE_DIR/bin"
     if [[ ! -x "$STATE_DIR/bin/qdrant" ]]; then
-      run curl -fsSL "$url" -o "$STATE_DIR/qdrant.tar.gz" \
-        || { warn "qdrant download failed — install it manually, RAG memory stays offline"; return 0; }
-      run tar -xzf "$STATE_DIR/qdrant.tar.gz" -C "$STATE_DIR/bin"
+      if ! run curl -fsSL --retry 3 --retry-delay 2 "$url" -o "$STATE_DIR/qdrant.tar.gz"; then
+        rm -f "$STATE_DIR/qdrant.tar.gz"
+        die "qdrant download failed ($url) — install qdrant yourself, or point --qdrant-url at a running instance"
+      fi
+      # Guard the extract: a 404/HTML body would fail inside tar and surface as
+      # an opaque trap message.
+      if ! run tar -xzf "$STATE_DIR/qdrant.tar.gz" -C "$STATE_DIR/bin"; then
+        rm -f "$STATE_DIR/qdrant.tar.gz"
+        die "the qdrant archive is not a valid tarball — check $url"
+      fi
       run chmod +x "$STATE_DIR/bin/qdrant"
     fi
     # The binary resolves ./config/config.yaml relative to its working directory
@@ -1185,8 +1721,8 @@ storage:
   storage_path: ./qdrant
 service:
   host: 127.0.0.1
-  http_port: 6333
-  grpc_port: 6334
+  http_port: $QDRANT_PORT
+  grpc_port: $QDRANT_GRPC_PORT
 telemetry_disabled: true
 YAML
     note "qdrant will be started by .huri-local/start.sh"
@@ -1275,12 +1811,24 @@ generate_configs() {
   stage_enabled config || return 0
   step "Configuration"
 
+  # Computed once here and reused by the Serve config, env.sh and start.sh, so
+  # every entrypoint agrees about the GPU architecture workaround.
+  GFX_OVERRIDE=""
+  if [[ "$GPU_VENDOR" == "amd" ]] && (( ! DRY_RUN )); then
+    GFX_OVERRIDE="$(rocm_gfx_override "$VPY" || true)"
+    if [[ -n "$GFX_OVERRIDE" ]]; then
+      warn "this GPU's arch is not in the installed torch build — setting HSA_OVERRIDE_GFX_VERSION=$GFX_OVERRIDE"
+      note "without it every GPU kernel launch aborts inside HIP"
+    fi
+  fi
+
   local cosy_dir="$ASSETS_DIR/cosyvoice"
   local cosy_model="$MODELS_DIR/cosytts/$COSYTTS_MODEL_ID"
   local whisper_path="$MODELS_DIR/whisper/${WHISPER_REPO_PREFIX}-${STT_SIZE}"
   local emage_path="$MODELS_DIR/emage/$EMAGE_REPO_ID"
   local pythonpath="$REPO_ROOT"
-  [[ "$P_TTS_DEV" != "off" ]] && pythonpath="$REPO_ROOT:$cosy_dir:$cosy_dir/third_party/Matcha-TTS"
+  # CosyVoice needs its checkout on the path; piper is a normal installed package.
+  [[ "$P_TTS_DEV" != "off" && "$TTS_ENGINE" == "cosyvoice" ]] && pythonpath="$REPO_ROOT:$cosy_dir:$cosy_dir/third_party/Matcha-TTS"
   local stt_workers=1
   if [[ "$P_STT_DEV" == "cpu" ]]; then
     stt_workers=$(( CPU_CORES / 4 ))
@@ -1328,11 +1876,29 @@ applications:
         # --- STT (faster-whisper) ---
         HURI_STT_MODEL_PATH: "$whisper_path"
         HURI_STT_NUM_WORKERS: "$stt_workers"
+        # The plan's device decision, translated into faster-whisper's own
+        # vocabulary (cpu | cuda | auto — "gpu" is not a legal value, and
+        # CTranslate2 calls the ROCm backend "cuda" as well). Without these the
+        # replica fell back to device="auto"/compute_type="auto", so the plan was
+        # decorative and CPU STT silently ran float32 instead of int8.
+        HURI_STT_DEVICE: "$(stt_ct2_device)"
+        HURI_STT_COMPUTE_TYPE: "$(stt_ct2_compute_type)"
 EOF
-    if [[ "$P_TTS_DEV" != "off" ]]; then
+    if [[ "$P_TTS_DEV" != "off" && "$TTS_ENGINE" == "piper" ]]; then
+      cat <<EOF
+
+        # --- TTS (piper) ---
+        # ONNX only: no torch, no GPU, ~30x faster than realtime on CPU.
+        # Switch engines with --tts-engine cosyvoice (needs an NVIDIA GPU).
+        HURI_TTS_ENGINE: "piper"
+        HURI_PIPER_VOICE: "$MODELS_DIR/piper/$PIPER_VOICE_NAME.onnx"
+EOF
+    fi
+    if [[ "$P_TTS_DEV" != "off" && "$TTS_ENGINE" == "cosyvoice" ]]; then
       cat <<EOF
 
         # --- TTS (CosyVoice3) ---
+        HURI_TTS_ENGINE: "cosyvoice"
         HURI_MODEL_PATH: "$cosy_model"
         HURI_COSY_DIR: "$cosy_dir"
         HURI_VOICE_SAMPLE_PATH: "$ASSETS_DIR/voice.wav"
@@ -1360,8 +1926,30 @@ EOF
         NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
 EOF
     fi
+    if [[ "$GPU_VENDOR" == "amd" ]] && (( GPU_COUNT > 1 )); then
+      cat <<EOF
+
+        # This host has $GPU_COUNT AMD devices. An APU's iGPU has a different gfx
+        # target from the dGPU and the CTranslate2 ROCm build carries no kernels
+        # for it, so a replica landing there fails with "no kernel image is
+        # available for execution on the device". start.sh pins Ray to GPU index
+        # $GPU_INDEX via HIP_VISIBLE_DEVICES; override with --gpu-index.
+EOF
+    fi
+    if [[ -n "$GFX_OVERRIDE" ]]; then
+      cat <<EOF
+
+        # This GPU's gfx target is absent from the installed torch build, so
+        # every kernel launch would abort inside HIP with an assertion that
+        # looks like a hardware fault. Report a supported same-family arch so
+        # the prebuilt kernels load. See rocm_gfx_override().
+        HSA_OVERRIDE_GFX_VERSION: "$GFX_OVERRIDE"
+EOF
+    fi
     cat <<EOF
-        HF_HUB_DOWNLOAD_TIMEOUT: "10"
+        # 10s is too tight for a first-run snapshot on a slow link; a timeout
+        # mid-download leaves a partial model that looks present.
+        HF_HUB_DOWNLOAD_TIMEOUT: "60"
 
     deployments:
       # Ingress + per-session router. CPU only.
@@ -1421,7 +2009,12 @@ EOF
   # The YAML is our own output, so the shape below is stable.
   if (( ! DRY_RUN )); then
     while IFS=$'\t' read -r k v; do
-      printf '%s=%q\n' "$k" "$v"
+      # Double-quoted, not %q: `printf %q` emits shell-escaped forms such as
+      # mic\,stt\,tag, which `source` handles but no dotenv parser does — and
+      # env.sh advertises this file as a .env. Values here are paths and
+      # comma-separated lists, so escaping " and \ is sufficient.
+      v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
+      printf '%s="%s"\n' "$k" "$v"
     done < <(awk '
       /^    runtime_env:/      { inside = 1; next }
       inside && /^    deployments:/ { exit }
@@ -1467,6 +2060,10 @@ EOF
       echo "    args:"
       echo "      incoming_sample_rate: \${senders.audio.args.sample_rate}"
       echo "      sample_rate: 44100"
+      # AudioHook.__init__ declares save_audio_dir with no default, and hooks are
+      # built with **hook.args — so omitting it is a hard TypeError at client
+      # startup, before the websocket is even opened. Empty = do not save.
+      echo "      save_audio_dir: \"\""
     fi
     if [[ "$P_GES_DEV" != "off" ]]; then
       echo "  motion:"
@@ -1501,6 +2098,15 @@ EOF
     fi
     echo "  qag:"
     echo "    name: qag"
+    echo "    args:"
+    # QAG defaults to use_emotion=True and then holds every question until an
+    # `emotion` event arrives. With emo/eag pruned from the plan nothing ever
+    # publishes one, so the pipeline stalls inside QAG — no error, no answer.
+    if [[ "$P_EMO_DEV" != "off" ]]; then
+      echo "      use_emotion: true"
+    else
+      echo "      use_emotion: false"
+    fi
     echo "  rag:"
     echo "    name: rag"
     echo "    args:"
@@ -1512,8 +2118,11 @@ EOF
     if [[ "$P_TTS_DEV" != "off" ]]; then
       echo "  tts:"
       echo "    name: tts"
-      echo "    args:"
-      echo "      min_clause_chars: 20"
+      # No args: TTS.__init__ takes only the deployment handle, and hooks/modules
+      # are built with **cfg.args — so any key here is a hard TypeError at
+      # session start. The old `min_clause_chars: 20` is a leftover from a design
+      # where HuRI buffered clauses itself; CosyVoice's frontend now does the
+      # segmentation (see the TTS docstring) and nothing reads that key.
       echo "    logging: INFO"
     fi
     if [[ "$P_GES_DEV" != "off" ]]; then
@@ -1546,6 +2155,27 @@ EOF
 }
 
 generate_run_scripts() {
+  # Does HuRI own a Qdrant it is able to start? start_qdrant() returns early
+  # when something already answers on the port, in which case no huri-qdrant
+  # container and no bundled binary were ever created. Decided here rather than
+  # in the services stage so that `--only config` gets it right too.
+  local qdrant_owned=0
+  if [[ -x "$STATE_DIR/bin/qdrant" ]]; then
+    qdrant_owned=1
+  elif [[ -n "$HAS_DOCKER" ]] && (( ! DRY_RUN )) \
+       && "$HAS_DOCKER" ps -a --format '{{.Names}}' 2>/dev/null | grep -qx huri-qdrant; then
+    qdrant_owned=1
+  fi
+
+  # Built as a plain string rather than a ${VAR:+...} inside the heredoc below:
+  # that construct does not survive the surrounding escaped ${...} expansions.
+  local gfx_export=""
+  if [[ -n "$GFX_OVERRIDE" ]]; then
+    gfx_export="# This GPU's gfx target is missing from the installed torch build; report a
+# supported same-family arch or every kernel launch aborts inside HIP.
+export HSA_OVERRIDE_GFX_VERSION=$GFX_OVERRIDE"
+  fi
+
   write_file "$STATE_DIR/env.sh" <<EOF
 # shellcheck shell=bash
 # Source this for a shell configured exactly like a Serve replica:
@@ -1573,6 +2203,7 @@ case ":\${PYTHONPATH:-}:" in
   *":\$HURI_ROOT:"*) ;;
   *) export PYTHONPATH="\$HURI_ROOT\${PYTHONPATH:+:\$PYTHONPATH}" ;;
 esac
+$gfx_export
 EOF
 
   {
@@ -1595,18 +2226,40 @@ EOF
 
 # --- 1. Qdrant: remote ($QDRANT_URL), nothing to start ----------------------
 EOF
-    else
+    elif (( qdrant_owned )); then
       cat <<EOF
 
 # --- 1. Qdrant --------------------------------------------------------------
-if ! curl -fsS --max-time 2 http://localhost:6333/readyz >/dev/null 2>&1; then
+if ! curl -fsS --max-time 2 ${QDRANT_URL%/}/readyz >/dev/null 2>&1; then
   if [ -x "$STATE_DIR/bin/qdrant" ]; then
     echo "[huri] starting qdrant (binary)"
-    (cd "$STATE_DIR" && nohup "$STATE_DIR/bin/qdrant" >"$STATE_DIR/qdrant.log" 2>&1 &)
+    (cd "$STATE_DIR" && { nohup "$STATE_DIR/bin/qdrant" >"$STATE_DIR/qdrant.log" 2>&1 & echo \$! >"$STATE_DIR/qdrant.pid"; })
   elif command -v ${HAS_DOCKER:-docker} >/dev/null 2>&1; then
     echo "[huri] starting qdrant container"
     ${HAS_DOCKER:-docker} start huri-qdrant >/dev/null 2>&1 || true
   fi
+  for _ in \$(seq 1 30); do
+    curl -fsS --max-time 1 ${QDRANT_URL%/}/readyz >/dev/null 2>&1 && break
+    sleep 1
+  done
+fi
+if ! curl -fsS --max-time 2 ${QDRANT_URL%/}/readyz >/dev/null 2>&1; then
+  echo "[huri] WARNING: qdrant is not answering at ${QDRANT_URL%/}."
+  echo "[huri]          RAG retrieval and memory will silently return nothing."
+fi
+EOF
+    else
+      cat <<EOF
+
+# --- 1. Qdrant: not managed by HuRI -----------------------------------------
+# Something was already listening on ${QDRANT_URL%/} when the installer ran, so
+# it created neither a huri-qdrant container nor a bundled binary. There is
+# nothing to start here — but it is still checked, because RAG fails silently
+# rather than loudly when the vector DB is missing.
+if ! curl -fsS --max-time 2 ${QDRANT_URL%/}/readyz >/dev/null 2>&1; then
+  echo "[huri] WARNING: qdrant is not answering at ${QDRANT_URL%/}, and HuRI does"
+  echo "[huri]          not manage this instance. Start it yourself, or free the"
+  echo "[huri]          port and re-run: scripts/install_local.sh --only services"
 fi
 EOF
     fi
@@ -1619,6 +2272,7 @@ if ! curl -fsS --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; the
   if command -v ollama >/dev/null 2>&1; then
     echo "[huri] starting ollama"
     nohup ollama serve >"$STATE_DIR/ollama.log" 2>&1 &
+    echo \$! >"$STATE_DIR/ollama.pid"
     for _ in \$(seq 1 30); do
       curl -fsS --max-time 1 http://localhost:11434/api/tags >/dev/null 2>&1 && break
       sleep 1
@@ -1637,6 +2291,28 @@ EOF
 
 # --- 3. Ray head ------------------------------------------------------------
 # Started from the repo root so replicas can import src.app.
+EOF
+
+    if [[ "$GPU_VENDOR" == "amd" ]] && (( GPU_COUNT > 1 )); then
+      cat <<EOF
+# This host exposes $GPU_COUNT AMD devices, so Ray is given only index
+# $GPU_INDEX ($GPU_NAME). An APU's iGPU has a different gfx target and the
+# CTranslate2 ROCm wheel carries no kernels for it, so an STT replica scheduled
+# there fails with "no kernel image is available for execution on the device".
+# HIP_VISIBLE_DEVICES, not ROCR_VISIBLE_DEVICES: Ray 2.55 raises on the latter,
+# and the two compose rather than alias — setting both selects nothing at all.
+# Re-run the installer with --gpu-index N to pick a different device.
+export HIP_VISIBLE_DEVICES=$GPU_INDEX
+EOF
+    fi
+    if [[ -n "$GFX_OVERRIDE" ]]; then
+      cat <<EOF
+# Exported before 'ray start' so the head and every replica inherit it.
+export HSA_OVERRIDE_GFX_VERSION=$GFX_OVERRIDE
+EOF
+    fi
+
+    cat <<EOF
 if ! ray status >/dev/null 2>&1; then
   echo "[huri] starting ray head"
   ray start --head --num-cpus=$CPU_CORES --num-gpus=$P_RAY_GPUS \\
@@ -1647,15 +2323,36 @@ fi
 echo "[huri] deploying config/huri_local.generated.yaml"
 serve deploy config/huri_local.generated.yaml
 
-cat <<'MSG'
+# 'serve deploy' only posts the config to the dashboard agent and returns 0; it
+# never waits. Without this poll the script printed "HuRI is deploying" and
+# exited 0 even when a replica constructor was already raising ImportError and
+# the application was heading for DEPLOY_FAILED.
+# Only the application-level 'status:' is read (the first one in the YAML) —
+# a per-deployment UNHEALTHY is transient during startup and must not abort us.
+echo "[huri] waiting for huri-app to become RUNNING (up to 300s)"
+huri_state=""
+for _ in \$(seq 1 100); do
+  huri_state="\$(serve status --name huri-app 2>/dev/null | awk '/^status:/ {print \$2; exit}')"
+  [ "\$huri_state" = "RUNNING" ] && break
+  [ "\$huri_state" = "DEPLOY_FAILED" ] && break
+  sleep 3
+done
 
-HuRI is deploying. Watch it come up with:
-    .huri-local/status.sh          (or the dashboard at http://127.0.0.1:8265)
-
-Then talk to it:
-    source .huri-local/env.sh
-    python -m src.client --config config/client_local.generated.yaml
-MSG
+if [ "\$huri_state" = "RUNNING" ]; then
+  echo
+  echo "HuRI is up. Talk to it with:"
+  echo "    source .huri-local/env.sh"
+  echo "    python -m src.client --config config/client_local.generated.yaml"
+  echo
+  echo "Status: .huri-local/status.sh   Dashboard: http://127.0.0.1:8265"
+else
+  echo
+  echo "[huri] FAILED: huri-app did not come up (last status: \${huri_state:-unknown})."
+  serve status --name huri-app 2>/dev/null | sed -n '1,60p' || true
+  echo
+  echo "[huri] Replica tracebacks are in /tmp/ray/session_latest/logs/serve/"
+  exit 1
+fi
 EOF
   } | write_file "$STATE_DIR/start.sh"
   run chmod +x "$STATE_DIR/start.sh"
@@ -1669,9 +2366,21 @@ source "$STATE_DIR/env.sh"
 serve shutdown -y >/dev/null 2>&1 || true
 ray stop >/dev/null 2>&1 || true
 if [ "\${1:-}" = "--all" ]; then
+  # Only stop what start.sh itself started. The previous version ran
+  # \`pkill -f "ollama serve"\`, which kills any Ollama on the machine —
+  # including one the user runs for unrelated work.
   ${HAS_DOCKER:-docker} stop huri-qdrant >/dev/null 2>&1 || true
-  pkill -f "$STATE_DIR/bin/qdrant" >/dev/null 2>&1 || true
-  pkill -f "ollama serve" >/dev/null 2>&1 || true
+  for svc in qdrant ollama; do
+    pidfile="$STATE_DIR/\$svc.pid"
+    if [ -r "\$pidfile" ]; then
+      pid="\$(cat "\$pidfile" 2>/dev/null || true)"
+      if [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then
+        echo "[huri] stopping \$svc (pid \$pid)"
+        kill "\$pid" 2>/dev/null || true
+      fi
+      rm -f "\$pidfile"
+    fi
+  done
 fi
 echo "[huri] stopped"
 EOF
@@ -1701,7 +2410,16 @@ probe() {
 probe qdrant "\${CURL[@]}" "${QDRANT_URL%/}/readyz"
 probe llm    "\${CURL[@]}" "\${AUTH[@]}" "${LLM_URL%/}${llm_probe_path}"
 probe ray    ray status
-probe huri   "\${CURL[@]}" http://localhost:8000/-/healthz
+
+# The Serve HTTP proxy answers /-/healthz as soon as it is up, which is true
+# even when huri-app is DEPLOY_FAILED and no deployment exists — so probing it
+# reported "huri up" on a completely broken stack. Read the application status.
+huri_state="\$(serve status --name huri-app 2>/dev/null | awk '/^status:/ {print \$2; exit}')"
+case "\${huri_state:-}" in
+  RUNNING) printf '%-10s up\n'   huri ;;
+  "")      printf '%-10s down       (not deployed)\n' huri ;;
+  *)       printf '%-10s down       (%s)\n' huri "\$huri_state" ;;
+esac
 echo
 serve status 2>/dev/null || true
 EOF
@@ -1711,7 +2429,8 @@ EOF
   # Keep generated artefacts out of git.
   local gi="$REPO_ROOT/.gitignore"
   local entry
-  for entry in "/.huri-local/" "/assets/" "config/*.generated.yaml"; do
+  for entry in "/.huri-local/" "/assets/" "config/*.generated.yaml" \
+               "/qdrant_storage/" "/.venv*/" "/uv.lock"; do
     if ! grep -qxF "$entry" "$gi" 2>/dev/null; then
       (( DRY_RUN )) || printf '%s\n' "$entry" >>"$gi"
     fi
@@ -1727,40 +2446,182 @@ verify() {
   step "Verification"
   (( DRY_RUN )) && { note "skipped in --dry-run"; return 0; }
 
-  local failures=0
-  local checks="ray,faster_whisper,qdrant_client,httpx,numpy"
-  [[ "$P_TTS_DEV" != "off" || "$P_GES_DEV" != "off" || "$P_EMO_DEV" != "off" ]] && checks="$checks,torch"
+  local failures=0 out
 
-  if "$VPY" - "$checks" <<'PY'
+  # detail <text> — print a captured error block as indented notes, so the real
+  # exception ends up both on screen and in install.log.
+  detail() {
+    local line
+    while IFS= read -r line; do [[ -n "$line" ]] && note "$line"; done <<<"$1"
+  }
+
+  # ctranslate2 is the actual STT engine (faster-whisper is a thin wrapper) and
+  # webrtcvad/sounddevice are the fragile MIC deps — one builds from sdist, the
+  # other dlopens libportaudio. All three were missing from this list, which is
+  # why an install could "succeed" with a dead speech pipeline.
+  local checks="ray,faster_whisper,ctranslate2,qdrant_client,httpx,numpy,webrtcvad"
+  [[ "$P_MODULES" == *mic* ]] && checks="$checks,sounddevice,scipy,omegaconf"
+  [[ "$GPU_VENDOR" != "none" || "$P_TTS_DEV" != "off" || "$P_GES_DEV" != "off" || "$P_EMO_DEV" != "off" ]] \
+    && checks="$checks,torch"
+
+  if out="$(PYTHONWARNINGS=ignore "$VPY" - "$checks" 2>&1 <<'PY'
 import importlib, sys
 missing = []
 for name in sys.argv[1].split(","):
     try:
         importlib.import_module(name)
     except Exception as exc:  # noqa: BLE001
-        missing.append(f"{name}: {exc}")
+        missing.append(f"{name}: {type(exc).__name__}: {exc}")
 if missing:
     print("\n".join(missing)); sys.exit(1)
 PY
-  then ok "core imports"
-  else err "core imports failed"; failures=1
+)"; then
+    ok "core imports ($checks)"
+  else
+    err "core imports failed:"
+    detail "$out"
+    # Keyed on the symptom, not on $GPU_VENDOR: by the time verification runs the
+    # planner may already have degraded the vendor to "none" (that is precisely
+    # the situation where this hint matters most).
+    if [[ "$out" == *"cannot open shared object file"* ]] \
+       && [[ "$out" =~ lib(amdhip|hip|roc|rccl|MIOpen) ]]; then
+      note ""
+      note "Those are ROCm libraries. The pip wheels link the ROCm runtime"
+      note "dynamically and bundle none of it, so it has to come from the distro:"
+      rocm_runtime_hint
+    fi
+    failures=1
+  fi
+
+  # The registry is what turns HURI_MODULES into Serve deployments; if it cannot
+  # be built, `serve deploy` fails later with a much less obvious error.
+  if out="$(cd "$REPO_ROOT" && HURI_MODULES="$P_MODULES" PYTHONWARNINGS=ignore \
+            "$VPY" -c 'import src.modules.modules as m; print(len(m.get_modules()), "modules registered")' 2>&1 | tail -1)"; then
+    ok "module registry builds: $out"
+  else
+    err "module registry failed to build (HURI_MODULES=$P_MODULES):"
+    detail "$out"
+    failures=1
   fi
 
   if [[ "$GPU_VENDOR" != "none" ]]; then
-    if "$VPY" -c 'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)' 2>/dev/null; then
-      ok "torch sees the GPU: $("$VPY" -c 'import torch;print(torch.cuda.get_device_name(0))' 2>/dev/null)"
+    # Separate "torch does not import" from "torch sees no GPU". Collapsing the
+    # two (the old `2>/dev/null` on an is_available() probe) reported a missing
+    # ROCm runtime as "cannot see the GPU" and threw the traceback away.
+    local tinfo
+    if ! tinfo="$("$VPY" -c 'import torch; print("build:", torch.version.hip or torch.version.cuda or "cpu", "| available:", torch.cuda.is_available(), "| devices:", torch.cuda.device_count())' 2>&1)"; then
+      err "torch does not import:"
+      detail "$tinfo"
+      [[ "$GPU_VENDOR" == "amd" ]] && rocm_runtime_hint
+      failures=1
+    elif [[ "$tinfo" != *"available: True"* ]]; then
+      err "torch imports but sees no GPU — $tinfo"
+      [[ "$GPU_VENDOR" == "amd" ]] && note "check /dev/kfd permissions and that you are in the 'render' group"
+      failures=1
     else
-      err "torch cannot see the GPU — GPU deployments will fall back to CPU or fail"
+      ok "torch sees the GPU — $tinfo"
+      # Seeing the GPU is not the same as being able to run on it: a wheel built
+      # without this card's gfx target reports the device happily and then
+      # aborts inside HIP on the first kernel launch. Actually launch one.
+      local karch
+      karch="$("$VPY" -c 'import torch;print(torch.cuda.get_device_properties(0).gcnArchName.split(":")[0], "|", ",".join(torch.cuda.get_arch_list()))' 2>&1 || true)"
+      if out="$("$VPY" -c '
+import torch
+a = torch.randn(256, 256, device="cuda", dtype=torch.float16)
+torch.cuda.synchronize()
+print("kernel launch ok:", float((a @ a).float().sum()) == float((a @ a).float().sum()))
+' 2>&1)"; then
+        ok "GPU kernels run — $karch"
+      else
+        err "torch sees the GPU but cannot launch a kernel on it:"
+        detail "$(printf '%s\n' "$out" | tail -4)"
+        note "arch / built-for: $karch"
+        if [[ "$GPU_VENDOR" == "amd" ]]; then
+          note "this card's gfx target is likely absent from the installed torch build."
+          note "Re-run 'scripts/install_local.sh --only config' to set HSA_OVERRIDE_GFX_VERSION,"
+          note "or install a torch built for it (download.pytorch.org ROCm wheels cover"
+          note "consumer RDNA3; the repo.radeon.com '.lw.' wheels do not)."
+        fi
+        failures=1
+      fi
+    fi
+  fi
+
+  # STT is the one GPU component on the ROCm path, and it runs on CTranslate2,
+  # not torch — so a torch-only probe says nothing about whether STT works.
+  if [[ "$P_STT_DEV" == "gpu" ]]; then
+    local ct2n
+    ct2n="$("$VPY" -c 'import ctranslate2; print(ctranslate2.get_cuda_device_count())' 2>&1)" || true
+    if [[ "$ct2n" =~ ^[0-9]+$ ]] && (( ct2n > 0 )); then
+      ok "CTranslate2 sees $ct2n GPU(s)"
+    else
+      err "STT is planned on the GPU but CTranslate2 reports no usable device:"
+      detail "$ct2n"
+      note "re-run with --profile cpu for a CPU STT install, or fix the GPU runtime"
       failures=1
     fi
   fi
 
-  if [[ "$P_TTS_DEV" != "off" ]]; then
-    if PYTHONPATH="$ASSETS_DIR/cosyvoice:$ASSETS_DIR/cosyvoice/third_party/Matcha-TTS" \
-       "$VPY" -c 'from cosyvoice.cli.cosyvoice import CosyVoice3' 2>/dev/null; then
+  # Actually load the model. Everything above can pass while STT still fails at
+  # the first utterance (wrong compute type, truncated snapshot, dead device).
+  local whisper_dir="$MODELS_DIR/whisper/${WHISPER_REPO_PREFIX}-${STT_SIZE}"
+  if [[ "$P_MODULES" == *stt* && -f "$whisper_dir/model.bin" ]]; then
+    local stt_dev stt_ct
+    stt_dev="$(stt_ct2_device)"; stt_ct="$(stt_ct2_compute_type)"
+    if out="$(PYTHONWARNINGS=ignore "$VPY" - "$whisper_dir" "$stt_dev" "$stt_ct" 2>&1 <<'PY'
+import sys
+from faster_whisper import WhisperModel
+WhisperModel(sys.argv[1], device=sys.argv[2], compute_type=sys.argv[3])
+print("loaded", sys.argv[1].rsplit("/", 1)[-1], "on", sys.argv[2], sys.argv[3])
+PY
+)"; then
+      ok "STT model loads: $out"
+    else
+      err "STT model failed to load (device=$stt_dev compute_type=$stt_ct):"
+      detail "$out"
+      failures=1
+    fi
+  fi
+
+  if [[ "$P_TTS_DEV" != "off" && "$TTS_ENGINE" == "piper" ]]; then
+    local piper_onnx="$MODELS_DIR/piper/$PIPER_VOICE_NAME.onnx"
+    if out="$(PYTHONWARNINGS=ignore "$VPY" - "$piper_onnx" <<'PY' 2>&1
+import sys, time
+import numpy as np
+from piper import PiperVoice
+v = PiperVoice.load(sys.argv[1])
+t0 = time.time()
+n = sum(np.asarray(c.audio_float_array).size for c in v.synthesize("HuRI is ready."))
+dur = n / v.config.sample_rate
+print(f"{dur:.2f}s audio in {time.time()-t0:.2f}s "
+      f"({(time.time()-t0)/dur:.3f}x realtime) @ {v.config.sample_rate}Hz")
+PY
+)"; then
+      ok "piper synthesises: $out"
+    else
+      err "piper failed to synthesise:"
+      detail "$(printf '%s\n' "$out" | tail -5)"
+      note "voice model expected at $piper_onnx"
+      note "re-download: $VPY -m piper.download_voices --download-dir $MODELS_DIR/piper $PIPER_VOICE_NAME"
+      failures=1
+    fi
+  fi
+
+  if [[ "$P_TTS_DEV" != "off" && "$TTS_ENGINE" == "cosyvoice" ]]; then
+    # Capture the traceback instead of discarding it with 2>/dev/null. The
+    # failure is almost never "check your submodules" — it is a missing
+    # transitive dependency (lightning/gdown/wget via Matcha-TTS, pyworld via
+    # the HyperPyYAML pydoc.locate of cosyvoice.dataset.processor), and the
+    # exception names it exactly.
+    if out="$(PYTHONPATH="$ASSETS_DIR/cosyvoice:$ASSETS_DIR/cosyvoice/third_party/Matcha-TTS" \
+              PYTHONWARNINGS=ignore \
+              "$VPY" -c 'from cosyvoice.cli.cosyvoice import CosyVoice3' 2>&1)"; then
       ok "CosyVoice3 importable"
     else
-      err "CosyVoice3 import failed (check $ASSETS_DIR/cosyvoice submodules)"; failures=1
+      err "CosyVoice3 import failed:"
+      detail "$(printf '%s\n' "$out" | tail -6)"
+      note "if a module is missing, it was dropped by generate_cpu_requirements()"
+      failures=1
     fi
 
     # Unlike the Kubernetes deploy (where the voice sample PVC is deliberately
@@ -1792,6 +2653,23 @@ PY
     local qargs=(); (( VERIFY_SSL )) || qargs+=(-k)
     if curl -fsS --max-time 5 "${qargs[@]}" "${QDRANT_URL%/}/readyz" >/dev/null 2>&1; then
       ok "qdrant reachable at $QDRANT_URL"
+
+      # 'conversations' is created on demand by RAGHandle, but the document
+      # collection only ever comes from the ingestion CLI. Missing, every
+      # retrieval returns nothing and the answers are merely ungrounded — no
+      # error anywhere. Report it here so it is known at install time.
+      local cols
+      cols="$(curl -fsS --max-time 5 "${qargs[@]}" "${QDRANT_URL%/}/collections" 2>/dev/null \
+              | tr ',' '\n' | sed -nE 's/.*"name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
+              | paste -sd, - || true)"
+      if [[ ",$cols," == *",documents,"* ]]; then
+        ok "qdrant has the 'documents' collection"
+      else
+        warn "qdrant has no 'documents' collection — document retrieval will return nothing"
+        note "collections present: ${cols:-<none>}"
+        note "Ingest some: source .huri-local/env.sh && python -m src.modules.rag.ingestion --help"
+        note "(conversational memory still works — RAGHandle creates it on demand)"
+      fi
     elif (( QDRANT_REMOTE )); then
       warn "qdrant at $QDRANT_URL did not answer — RAG memory will fail at runtime"
     else
@@ -1828,10 +2706,31 @@ main() {
   detect_host
   detect_gpu
   detect_tools
-  if ! detect_python; then
-    die "no suitable Python found (need 3.10–3.12; pass --python /path/to/python3.12)"
-  fi
+  local py_ok=1
+  detect_python || py_ok=0
   report_detection
+
+  if (( ! py_ok )); then
+    echo
+    if [[ "$PKG_MGR" == "pacman" ]]; then
+      err "no suitable Python found (need 3.10–3.12)"
+      note "Arch/EndeavourOS only ship the current python via pacman, which is usually"
+      note "newer than 3.12 — there is no 3.10–3.12 package in the official repos."
+      note "Install one via pyenv/uv, or the AUR (e.g. 'yay -S python312'), then re-run"
+      note "with --python /path/to/python3.12"
+      die "no suitable Python found"
+    elif [[ "$PKG_MGR" == "apt" ]]; then
+      err "no suitable Python found (need 3.10–3.12)"
+      note "Ubuntu 24.04: sudo apt install python3.12 python3.12-venv python3.12-dev"
+      note "Ubuntu 22.04: 3.12 is not in the archive — add deadsnakes first:"
+      note "  sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt update"
+      note "  sudo apt install python3.12 python3.12-venv python3.12-dev"
+      note "Then re-run with --python /usr/bin/python3.12"
+      die "no suitable Python found"
+    else
+      die "no suitable Python found (need 3.10–3.12; pass --python /path/to/python3.12)"
+    fi
+  fi
 
   resolve_endpoints
   plan

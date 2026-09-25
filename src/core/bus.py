@@ -9,6 +9,17 @@ from .module import Module
 logger = logging.getLogger("ray.serve")
 
 
+def _safe_summary(event: EventData) -> str:
+    """
+    summarize() for logging, which must never be able to drop an event.
+    """
+
+    try:
+        return event.summarize()
+    except Exception:  # noqa: BLE001 - logging must not raise
+        return f"<{type(event).__name__} summarize() failed>"
+
+
 class EventGraph:
     """
     Asynchronous event routing system for HuRI modules.
@@ -34,20 +45,24 @@ class EventGraph:
 
     def __init__(self):
         self.subscribers = defaultdict(list)
+        self._tasks: set[asyncio.Task] = set()
 
     def register(self, module: Module):
         self.subscribers[module.input_type].append(module)
 
     async def publish(self, event_topic, data):
         subs = self.subscribers[event_topic]
-        if event_topic not in ("audio_in",):  # skip mic-frame spam
+
+        if event_topic not in ("audio.in",):
             logger.info(
                 "[GRAPH] publish topic=%r subscribers=%s",
                 event_topic,
                 [type(m).__name__ for m in subs],
             )
         for module in subs:
-            asyncio.create_task(self._run(module, data))
+            task = asyncio.create_task(self._run(module, data))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
     async def _run(self, module: Module, data):
         try:
@@ -63,7 +78,7 @@ class EventGraph:
                             "[GRAPH] %s -> %r: %s",
                             type(module).__name__,
                             module.output_type,
-                            item.summarize(),
+                            _safe_summary(item),
                         )
                         await self.publish(module.output_type, item)
                 except Exception:
@@ -80,7 +95,7 @@ class EventGraph:
                             "[GRAPH] %s -> %r: %s",
                             type(module).__name__,
                             module.output_type,
-                            value.summarize(),
+                            _safe_summary(value),
                         )
                         await self.publish(module.output_type, value)
                 except Exception:

@@ -13,6 +13,12 @@ from .events import Transcript, Voice
 
 _MODEL_PATH = os.environ.get("HURI_STT_MODEL_PATH", "base")
 _NUM_WORKERS = int(os.environ.get("HURI_STT_NUM_WORKERS", "2"))
+# Set by the generated Serve config (scripts/install_local.sh) from the install
+# plan's STT decision, already translated into faster-whisper's vocabulary:
+# "cpu" | "cuda" | "auto" for the device, "int8"/"float16"/"auto" for the type.
+# Defaulting to "auto" here keeps the hand-written configs in config/ working.
+_DEVICE = os.environ.get("HURI_STT_DEVICE", "auto")
+_COMPUTE_TYPE = os.environ.get("HURI_STT_COMPUTE_TYPE", "auto")
 
 
 @serve.deployment(name="STT", max_ongoing_requests=8)
@@ -36,8 +42,8 @@ class STTDeployment:
     def __init__(
         self,
         model: str = _MODEL_PATH,
-        device: str = "auto",
-        compute_type: str = "auto",
+        device: str = _DEVICE,
+        compute_type: str = _COMPUTE_TYPE,
         num_workers: int = _NUM_WORKERS,
     ):
         from faster_whisper import WhisperModel

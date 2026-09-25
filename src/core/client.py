@@ -163,10 +163,30 @@ class Client:
 
             await ws.send(json.dumps(asdict(self.config)))
 
-            init_msg = json.loads(await ws.recv())
-            if init_msg.get("type") == "session_init":
-                user_id = init_msg["user_id"]
-                print(f"Session started with _user_id: {user_id}")
+            try:
+                init_msg = json.loads(await ws.recv())
+            except websockets.ConnectionClosed:
+                print(
+                    "HuRI closed the connection without sending a session reply.\n"
+                    "  Check the server is deployed: .huri-local/status.sh\n"
+                    "  Replica errors: /tmp/ray/session_latest/logs/serve/"
+                )
+                return
+
+            msg_type = init_msg.get("type")
+            if msg_type == "session_error":
+                print(f"HuRI rejected this client config: {init_msg.get('error')}")
+                server_modules = init_msg.get("server_modules")
+                if server_modules:
+                    print(f"  server registered : {', '.join(server_modules)}")
+                    print(f"  this config wants : {', '.join(self.config.modules)}")
+                return
+            if msg_type != "session_init":
+                print(f"Unexpected first message from HuRI: {init_msg!r}")
+                return
+
+            user_id = init_msg["user_id"]
+            print(f"Session started with _user_id: {user_id}")
 
             receive_task = asyncio.create_task(self._receive_loop(ws=ws))
             await asyncio.gather(

@@ -26,10 +26,14 @@ hooks:
     args:
       incoming_sample_rate: ${senders.text.args.sample_rate}
       sample_rate: 44100
+      # Belongs to the audio hook, not motion: MotionHook swallows unknown
+      # kwargs silently, so parked under motion it would parse and then do
+      # nothing. It was also indented one level too deep, which made the whole
+      # file invalid YAML.
+      save_audio_dir: "uuid"
   motion:
     name: motion
     topics: [motion]
-      save_audio_dir: "uuid"
 
 modules:
   # mic:
