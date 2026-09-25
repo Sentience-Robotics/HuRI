@@ -94,7 +94,7 @@ additionally unlocks CosyVoice and gesture generation.
 The plan is a starting point, not a cage.
 
 ```sh
-# Only the modules you name (subset of mic,stt,tag,emo,eag,qag,rag,tts,gesture)
+# Only the modules you name (subset of vad,stt,tag,emo,eag,qag,rag,tts,mov)
 scripts/install_local.sh --modules mic,stt,tag,qag,rag    # voice in, text out
 scripts/install_local.sh --modules rag                    # text in, text out
 
@@ -285,7 +285,7 @@ scripts/test_install.sh            # run the installer in clean Ubuntu container
 - **src/interfaces** — `cli_interface`: the reference client senders (audio,
   text) and hooks (token, audio, motion)
 - **src/modules**
-  - `speech_to_text` — `microphone_vad` (MIC), `speech_to_text` (STT),
+  - `speech_to_text` — `microphone_vad` (VAD), `speech_to_text` (STT),
     `text_aggregator` (TAG)
   - `text_to_speech` — `piper_tts` (default engine), `text_to_speech`
     (CosyVoice3 + the `TTS` module)

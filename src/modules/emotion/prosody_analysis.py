@@ -14,8 +14,8 @@ from .events import Emotion
 _MODEL_NAME = os.environ.get("HURI_EMO_MODEL", "superb/hubert-large-superb-er")
 
 
-@serve.deployment(name="EMO", max_ongoing_requests=8)
-class EMODeployment:
+@serve.deployment(name="EMOHandle", max_ongoing_requests=8)
+class EMOHandle:
     """Prosody emotion model.
 
     :model_name: name of the Emotion Analysis model.
@@ -75,7 +75,7 @@ class EMO(ModuleWithHandle):
     :analysis_window: duration of audio per analysis (in s).
     """
 
-    _handle_cls = EMODeployment
+    _handle_cls = EMOHandle
     input_type = "voice"
     output_type = "emotion"
 
