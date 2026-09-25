@@ -36,8 +36,8 @@ hooks:
     topics: [motion]
 
 modules:
-  mic:
-    name: mic
+  vad:
+    name: vad
     args:
       vad_agressiveness: 3
       silence_duration: 1.5
@@ -72,6 +72,6 @@ modules:
   tts:
     name: tts
     logging: INFO
-  gesture:
-    name: gesture
+  mov:
+    name: mov
     logging: INFO

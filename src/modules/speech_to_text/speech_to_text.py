@@ -21,8 +21,8 @@ _DEVICE = os.environ.get("HURI_STT_DEVICE", "auto")
 _COMPUTE_TYPE = os.environ.get("HURI_STT_COMPUTE_TYPE", "auto")
 
 
-@serve.deployment(name="STT", max_ongoing_requests=8)
-class STTDeployment:
+@serve.deployment(name="STTHandle", max_ongoing_requests=8)
+class STTHandle:
     """faster-whisper model wrapper.
 
     Holds the WhisperModel and runs transcription on its own Ray Serve actor,
@@ -91,7 +91,7 @@ class STT(ModuleWithHandle):
     Transcribe voice using Faster_Whisper.
 
     Holds the per-session sliding-window buffer and delegates the actual
-    transcription to a handle-backed STTDeployment, so the Whisper model runs
+    transcription to a handle-backed STTHandle, so the Whisper model runs
     off the HuRI master node.
 
     input: voice,
@@ -105,7 +105,7 @@ class STT(ModuleWithHandle):
     :transcribe_step: overlap between consecutive transcription windows (in s).
     """
 
-    _handle_cls = STTDeployment
+    _handle_cls = STTHandle
     input_type = "voice"
     output_type = "transcript"
 
@@ -136,10 +136,8 @@ class STT(ModuleWithHandle):
         self.running = False
         self.lock: asyncio.Lock = asyncio.Lock()
 
-        # Set when the VAD reports the end of a turn. It is a flag, not an
-        # instruction to run right away: the VAD emits it only once, so if a
-        # transcription is in flight it must be remembered and honoured by that
-        # in-flight call instead of being dropped.
+        # Set when the end of the voice is received. Remembered if a
+        # transcription is in flight, so that call handles it once it finishes.
         self._end_requested: bool = False
 
     async def process(self, voice: Voice) -> AsyncGenerator[Transcript, None]:
@@ -163,8 +161,7 @@ class STT(ModuleWithHandle):
 
         Loops so that an end-of-turn that arrives while a window is being
         transcribed is handled right after it, in this same call. Each pass is
-        yielded as its own Transcript: stitching the overlapping windows back
-        together is TAG's job, not STT's.
+        yielded as its own Transcript.
         """
 
         while True:
