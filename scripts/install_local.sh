@@ -138,7 +138,7 @@ QDRANT_URL="http://localhost:6333"
 VERIFY_SSL=1
 MODULES_OVERRIDE=""
 STT_DEVICE_OVERRIDE=""
-TTS_ENGINE="piper"
+TTS_ENGINE="auto"
 PIPER_VOICE_NAME="en_US-lessac-medium"
 VOICE_SAMPLE=""
 VOICE_TRANSCRIPT="Instinct creates its own oppressors and bids us rise up against them."
@@ -166,7 +166,9 @@ Planning
       --vram MB           Override detected VRAM (for GPUs the tools can't read)
       --reserve-vram MB   VRAM left free for driver/context (default: 700)
       --stt-model SIZE    base | small | medium | large-v3 (default: base)
-      --tts-engine E      piper | cosyvoice                (default: piper)
+      --tts-engine E      auto | piper | cosyvoice         (default: auto)
+                          auto: cosyvoice when an NVIDIA GPU has room for it,
+                            piper everywhere else.
                           piper: ONNX, ~30x faster than realtime on any CPU,
                             61 MB voice, no GPU — works on every machine.
                           cosyvoice: zero-shot voice cloning from --voice-sample,
@@ -262,7 +264,7 @@ done
 [[ -n "${VRAM_STT[$STT_SIZE]:-}" ]] || { echo "unknown --stt-model '$STT_SIZE'" >&2; exit 2; }
 case "$PROFILE" in auto|nvidia|amd|cpu) ;; *) echo "unknown --profile '$PROFILE'" >&2; exit 2 ;; esac
 case "${STT_DEVICE_OVERRIDE:-cpu}" in gpu|cpu) ;; *) echo "unknown --stt-device '$STT_DEVICE_OVERRIDE' (gpu|cpu)" >&2; exit 2 ;; esac
-case "$TTS_ENGINE" in piper|cosyvoice) ;; *) echo "unknown --tts-engine '$TTS_ENGINE' (piper|cosyvoice)" >&2; exit 2 ;; esac
+case "$TTS_ENGINE" in auto|piper|cosyvoice) ;; *) echo "unknown --tts-engine '$TTS_ENGINE' (auto|piper|cosyvoice)" >&2; exit 2 ;; esac
 
 # An API key given on an earlier run lives in .huri-local/secrets.env; reload it
 # so `--only config` re-runs keep working without re-passing the secret.
@@ -746,9 +748,21 @@ plan() {
   # Piper needs no GPU and is faster than realtime on any CPU, so it is simply
   # always on — this is what makes "voice out" work on every machine rather than
   # only on NVIDIA hosts.
+  # "auto" takes CosyVoice (voice cloning) only where it actually runs well — an
+  # NVIDIA GPU with room for it — and falls back to piper everywhere else.
+  local tts_auto=0
+  if [[ "$TTS_ENGINE" == "auto" ]]; then
+    tts_auto=1
+    if [[ "$GPU_VENDOR" == "nvidia" ]] && (( pool >= VRAM_TTS_FP16 )); then
+      TTS_ENGINE="cosyvoice"
+    else
+      TTS_ENGINE="piper"
+    fi
+  fi
   if [[ "$TTS_ENGINE" == "piper" ]]; then
     P_TTS_DEV="cpu"
     P_TTS_WHY="piper (onnx) — ~30x faster than realtime, no GPU needed"
+    (( tts_auto )) && P_TTS_WHY="auto: no NVIDIA GPU with $(mb_to_gb $VRAM_TTS_FP16) GiB free — piper (onnx), no GPU needed"
     plan_tts_done=1
   fi
 
@@ -758,6 +772,7 @@ plan() {
   elif [[ "$GPU_VENDOR" == "nvidia" ]] && (( pool >= tts_cost )); then
     P_TTS_DEV="gpu"; P_TTS_VRAM=$tts_cost; pool=$(( pool - tts_cost ))
     P_TTS_WHY="fp16 on $GPU_NAME"
+    (( tts_auto )) && P_TTS_WHY="auto: fp16 on $GPU_NAME (--tts-engine piper to keep the VRAM)"
   elif [[ "$GPU_VENDOR" == "amd" ]]; then
     if (( FORCE_TTS )); then
       P_TTS_DEV="cpu"; P_TTS_WHY="forced onto CPU; ROCm vocoder crashes in MIOpen conv (~7x realtime)"
@@ -1172,9 +1187,12 @@ compute_system_packages() {
   # Ubuntu/Debian: creating a venv from the *system* python also needs the
   # matching python3.X-venv package, and the sdist builds (webrtcvad, pyworld)
   # need the headers for *that* interpreter — generic python3-dev is the wrong
-  # version as soon as the venv python is not /usr/bin/python3 (deadsnakes on
-  # 22.04, uv, pyenv), which is the normal case here.
-  if [[ "$PKG_MGR" == "apt" && -n "$PY_VERSION" ]]; then
+  # version when it is not the distro default (deadsnakes on 22.04). Only for an
+  # apt-owned interpreter (base prefix /usr): pyenv/uv/conda builds ship their
+  # own headers and venv, and their version often has no apt package at all
+  # (Debian 13 only packages 3.13, so python3.12-venv does not exist there).
+  if [[ "$PKG_MGR" == "apt" && -n "$PY_VERSION" ]] \
+     && [[ "$("$PY_BIN" -c 'import sys;print(sys.base_prefix)' 2>/dev/null)" == "/usr" ]]; then
     local pyxy; pyxy="python$(cut -d. -f1,2 <<<"$PY_VERSION")"
     SYS_PKGS+=("$pyxy-venv" "$pyxy-dev")
   fi

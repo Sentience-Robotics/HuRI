@@ -79,8 +79,8 @@ works on it. Nothing here is aspirational — these are measured outcomes:
 | Module | CPU only | NVIDIA | AMD / ROCm |
 | --- | --- | --- | --- |
 | **STT** (faster-whisper) | ✅ `int8`, realtime for `base` | ✅ `float16` | ✅ `float16` |
-| **TTS — piper** (default) | ✅ **~30x faster than realtime** | ✅ | ✅ (runs on CPU; it does not need a GPU) |
-| **TTS — cosyvoice** (opt-in) | ⚠️ ~7x *slower* than realtime | ✅ `fp16` | ❌ vocoder faults in a MIOpen convolution |
+| **TTS — piper** (default without an NVIDIA GPU) | ✅ **~30x faster than realtime** | ✅ | ✅ (runs on CPU; it does not need a GPU) |
+| **TTS — cosyvoice** (default on NVIDIA with ≥4.4 GiB free) | ⚠️ ~7x *slower* than realtime | ✅ `fp16` | ❌ vocoder faults in a MIOpen convolution |
 | **RAG / LLM** (Ollama) | ✅ tier picked from free RAM | ✅ | ✅ |
 | **EMO** (prosody) | ✅ always CPU | ✅ | ✅ |
 | **MOV / gesture** (EMAGE) | ❌ slower than realtime | ✅ | ❌ not in the ROCm build |
