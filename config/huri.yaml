@@ -97,6 +97,13 @@ applications:
           num_cpus: 1
           num_gpus: 0
 
+      # EMO: shared prosody-emotion actor.
+      - name: EMO
+        num_replicas: 1
+        ray_actor_options:
+          num_cpus: 1
+          num_gpus: 0
+
       # RAG: embeddings (API) + LLM client. No GPU needed.
       - name: RAGHandle
         num_replicas: 1

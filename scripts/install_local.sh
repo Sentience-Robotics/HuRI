@@ -1991,6 +1991,16 @@ EOF
           num_gpus: $P_TTS_FRAC
 EOF
     fi
+    if [[ "$P_EMO_DEV" != "off" ]]; then
+      cat <<EOF
+
+      - name: EMO
+        num_replicas: 1
+        ray_actor_options:
+          num_cpus: 1
+          num_gpus: 0
+EOF
+    fi
     if [[ "$P_GES_DEV" != "off" ]]; then
       cat <<EOF
 

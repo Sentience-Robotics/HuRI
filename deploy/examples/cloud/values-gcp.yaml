@@ -122,6 +122,13 @@ ray:
               num_cpus: 1
               num_gpus: 0.2
               resources: {"GPU_TYPE_NVIDIA": 0.2}
+          - name: EMO
+            # Stateless per call; sliding-window buffering is per-session in
+            # the EMO module. CPU inference, no GPU.
+            max_ongoing_requests: 8
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0
           - name: RAGHandle
             # CPU/network-bound (num_gpus: 0) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â these replicas schedule on the
             # existing nodes without needing GPU, so this one genuinely scales

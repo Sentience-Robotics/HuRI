@@ -59,6 +59,13 @@ ray:
               num_cpus: 1
               num_gpus: 0.5
               resources: {"GPU_TYPE_AMD": 0.5}
+          # EMO: shared prosody-emotion actor (CPU), pinned to AMD like STT.
+          - name: EMO
+            num_replicas: 1
+            ray_actor_options:
+              num_cpus: 1
+              num_gpus: 0
+              resources: {"GPU_TYPE_AMD": 0.01}
           # RAG: embeddings (API) + LLM client. Pinned to AMD for its dependencies, no GPU needed.
           - name: RAGHandle
             num_replicas: 1
